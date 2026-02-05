@@ -28,18 +28,20 @@ async function parseRes(res: Response): Promise<Json> {
 }
 
 export async function providerGetGames(): Promise<Json> {
-  const url = `${providerBaseUrl()}/v1/provider/games`;
+  const url = `${providerBaseUrl()}/v1/public/games`;
   const res = await fetch(url, {
     method: "GET",
-    // games endpoint est signé normalement, mais ton game-server l’utilise en “liste”
-    // Si tu veux strict, on peut ajouter un endpoint public “/public/games”.
     headers: publicHeaders(),
     cache: "no-store",
   });
   const data = await parseRes(res);
-  if (!res.ok) throw new Error(data?.message || "providerGetGames failed");
+  if (!res.ok) {
+    const msg = Array.isArray(data?.message) ? data.message.join(", ") : data?.message;
+    throw new Error(msg || "providerGetGames failed");
+  }
   return data;
 }
+
 
 export async function providerCreateSession(body: any): Promise<Json> {
   const url = `${providerBaseUrl()}/v1/public/session`;
