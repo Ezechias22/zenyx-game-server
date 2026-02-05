@@ -1,87 +1,71 @@
 // src/lib/provider.ts
-import { z } from "zod";
+import type { Game } from "./types";
 
-const EnvSchema = z.object({
-  PROVIDER_BASE_URL: z.string().url(),
-  PUBLIC_TOKEN: z.string().min(5),
-  OPERATOR_KEY: z.string().min(5)
-});
+function mustEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
+}
 
-function getEnv() {
-  const parsed = EnvSchema.safeParse({
-    PROVIDER_BASE_URL: process.env.PROVIDER_BASE_URL,
-    PUBLIC_TOKEN: process.env.PUBLIC_TOKEN,
-    OPERATOR_KEY: process.env.OPERATOR_KEY
+const PROVIDER_BASE_URL = mustEnv("PROVIDER_BASE_URL").replace(/\/+$/, "");
+const PUBLIC_TOKEN = mustEnv("PUBLIC_TOKEN");
+const OPERATOR_KEY = mustEnv("OPERATOR_KEY");
+
+function providerHeaders() {
+  return {
+    "x-public-token": PUBLIC_TOKEN,
+    "x-operator-key": OPERATOR_KEY,
+    "content-type": "application/json",
+  };
+}
+
+export async function providerGetGames(): Promise<Game[]> {
+  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/games`, {
+    method: "GET",
+    // endpoint operator-signed (pas public) -> il faut API KEY + SIGNATURE normalement
+    // MAIS ton provider expose /v1/public/games via OperatorAuthGuard (x-api-key + signature).
+    // Pour éviter ça côté game-server, on passe par un endpoint PUBLIC côté provider:
+    // => on doit ajouter un endpoint /v1/public/games côté provider (si pas déjà fait).
+    //
+    // Donc si tu n'as pas /v1/public/games, dis-moi et je te donne le patch provider.
+    headers: providerHeaders(),
+    cache: "no-store",
   });
 
-  if (!parsed.success) {
-    // Affiche une erreur claire dans les logs Next
-    console.error("❌ Missing/invalid env:", parsed.error.flatten().fieldErrors);
-    throw new Error("Missing/invalid env (PROVIDER_BASE_URL/PUBLIC_TOKEN/OPERATOR_KEY)");
-  }
-  return parsed.data;
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.message || data?.error || "providerGetGames failed");
+  return Array.isArray(data) ? data : [];
 }
 
-async function providerFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const env = getEnv();
-  const url = `${env.PROVIDER_BASE_URL.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
-
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      "x-public-token": env.PUBLIC_TOKEN,
-      "x-operator-key": env.OPERATOR_KEY,
-      "accept": "application/json",
-      "content-type": "application/json"
-    },
-    cache: "no-store"
-  });
-
-  const text = await res.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-
-  if (!res.ok) {
-    const msg = typeof data === "object" && data?.message ? JSON.stringify(data.message) : text;
-    throw new Error(`Provider error ${res.status}: ${msg}`);
-  }
-
-  return data as T;
-}
-
-export async function providerGetGames() {
-  // /v1/provider/games est protégé par signature, donc ici on passe par l’endpoint public:
-  // on va faire une liste locale côté game server si tu veux, MAIS on peut aussi appeler provider/games si tu exposes un endpoint public games.
-  // => Dans notre flow actuel, la liste des jeux côté UI peut être "hardcodée" OU via provider/games si tu la rends publique.
-  // Pour l’instant on utilise provider/games direct (si ça marche chez toi, ok).
-  return providerFetch<any>("/v1/provider/games", { method: "GET" });
-}
-
-export async function providerCreateSession(payload: {
+export async function providerCreateSession(input: {
   gameCode: string;
   playerExternalId: string;
   currency: string;
-  clientSeed?: string;
 }) {
-  return providerFetch<any>("/v1/public/session", {
+  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/session`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    headers: providerHeaders(),
+    body: JSON.stringify(input),
   });
+
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.message || data?.error || "providerCreateSession failed");
+  return data;
 }
 
-export async function providerPlay(payload: {
+export async function providerPublicPlay(input: {
   sessionId: string;
   bet: number;
   clientSeed?: string;
   idempotencyKey?: string;
 }) {
-  return providerFetch<any>("/v1/public/play", {
+  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/play`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    headers: providerHeaders(),
+    body: JSON.stringify(input),
   });
+
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.message || data?.error || "providerPublicPlay failed");
+  return data;
 }

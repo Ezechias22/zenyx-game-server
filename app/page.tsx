@@ -1,125 +1,131 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Game = { id: string; kind: string; rtp: number };
 
-export default function HomePage() {
-  const [games, setGames] = useState<Game[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+const cardStyle: React.CSSProperties = {
+  border: "1px solid rgba(255,255,255,0.10)",
+  borderRadius: 14,
+  padding: 12,
+  background: "rgba(0,0,0,0.25)",
+  boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
+};
 
+export default function HomePage() {
   const [playerExternalId, setPlayerExternalId] = useState("player_demo_123");
   const [currency, setCurrency] = useState("BRL");
+  const [games, setGames] = useState<Game[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function loadGames() {
+    setErr(null);
+    try {
+      const r = await fetch("/api/games", { cache: "no-store" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "Failed to load games");
+      setGames(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setErr(e?.message || "Load error");
+      setGames([]);
+    }
+  }
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/games", { cache: "no-store" });
-        const data = await res.json();
-        if (!res.ok) throw new Error(JSON.stringify(data));
-        setGames(data.games);
-      } catch (e: any) {
-        setErr(e?.message || String(e));
-      } finally {
-        setLoading(false);
-      }
-    })();
+    loadGames();
   }, []);
 
+  async function openGame(gameCode: string) {
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gameCode,
+          playerExternalId,
+          currency,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || data?.message || "Create session failed");
+
+      const sessionId = data?.sessionId;
+      if (!sessionId) throw new Error("No sessionId returned");
+
+      window.location.href = `/play?sessionId=${encodeURIComponent(sessionId)}`;
+    } catch (e: any) {
+      setErr(e?.message || "Open error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 20 }}>
-      <h1 style={{ marginTop: 0 }}>ZENYX Game Server</h1>
-
-      <p style={{ opacity: 0.85, lineHeight: 1.5 }}>
-        En production, ton casino ouvre directement l'URL{" "}
-        <code style={{ padding: "2px 6px", borderRadius: 6, background: "rgba(255,255,255,0.08)" }}>
-          /play?sessionId=...
-        </code>{" "}
-        dans un iframe.
-      </p>
-
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, opacity: 0.8 }}>playerExternalId</span>
-          <input
-            value={playerExternalId}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPlayerExternalId(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, opacity: 0.8 }}>currency</span>
-          <input
-            value={currency}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCurrency(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
+    <main style={{ padding: 20, fontFamily: "system-ui", color: "#fff", minHeight: "100vh", background: "linear-gradient(140deg,#0b1224,#06070d)" }}>
+      <h1 style={{ marginTop: 0 }}>🎰 ZENYX Game Server</h1>
+      <div style={{ opacity: 0.85, marginBottom: 14 }}>
+        En production, ton casino ouvre directement l’URL <b>/play?sessionId=...</b> dans un iframe.
       </div>
 
-      <h2 style={{ marginTop: 22 }}>Jeux disponibles</h2>
+      {err && <div style={{ color: "#ff6b6b", marginBottom: 10 }}>❌ {err}</div>}
 
-      {loading && <div style={{ opacity: 0.8 }}>Chargement...</div>}
-      {err && <div style={{ color: "#ff7b7b" }}>Erreur: {err}</div>}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>playerExternalId</div>
+          <input value={playerExternalId} onChange={(e) => setPlayerExternalId(e.target.value)} style={{ width: 220, height: 34, borderRadius: 8 }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>currency</div>
+          <input value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ width: 120, height: 34, borderRadius: 8 }} />
+        </div>
+        <button onClick={loadGames} style={{ height: 36 }}>
+          Rafraîchir la liste
+        </button>
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+      <h2 style={{ marginTop: 0 }}>Jeux disponibles</h2>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
         {games.map((g) => (
           <div key={g.id} style={cardStyle}>
-            <div style={{ fontWeight: 700 }}>{g.id}</div>
-            <div style={{ opacity: 0.8, fontSize: 12 }}>Type: {g.kind}</div>
-            <div style={{ opacity: 0.8, fontSize: 12 }}>RTP: {(g.rtp * 100).toFixed(2)}%</div>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>{g.id}</div>
+            <div style={{ opacity: 0.85, fontSize: 12, marginTop: 6 }}>
+              Type: {g.kind} • RTP: {g.rtp}
+            </div>
+
+            {/* Thumbnail placeholder (tu peux mettre tes vraies images par jeu ici) */}
+            <div
+              style={{
+                marginTop: 10,
+                height: 120,
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.10)",
+                background: "radial-gradient(circle at 30% 30%, rgba(255,215,0,0.18), rgba(0,0,0,0.12))",
+              }}
+            />
 
             <button
-              style={btnStyle}
-              onClick={async () => {
-                const res = await fetch("/api/session", {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ gameCode: g.id, playerExternalId, currency }),
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                  alert("Erreur session: " + JSON.stringify(data));
-                  return;
-                }
-                window.location.href = data.playUrl;
+              disabled={loading}
+              onClick={() => openGame(g.id)}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid rgba(255,215,0,0.35)",
+                background: loading ? "rgba(255,255,255,0.08)" : "rgba(255,215,0,0.18)",
+                color: "#fff",
+                cursor: loading ? "not-allowed" : "pointer",
               }}
             >
-              Ouvrir (create session)
+              Ouvrir
             </button>
           </div>
         ))}
       </div>
-    </div>
+    </main>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.06)",
-  color: "white",
-  outline: "none",
-  minWidth: 260
-};
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.10)",
-  background: "rgba(255,255,255,0.05)",
-  borderRadius: 14,
-  padding: 14,
-  display: "grid",
-  gap: 8
-};
-
-const btnStyle: React.CSSProperties = {
-  marginTop: 8,
-  border: "none",
-  borderRadius: 12,
-  padding: "10px 12px",
-  cursor: "pointer",
-  fontWeight: 700
-};
