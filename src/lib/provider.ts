@@ -1,71 +1,68 @@
-// src/lib/provider.ts
-import type { Game } from "./types";
+type Json = any;
 
-function mustEnv(name: string) {
+function mustEnv(name: string): string {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
+  if (!v || !String(v).trim()) throw new Error(`Missing env: ${name}`);
   return v;
 }
 
-const PROVIDER_BASE_URL = mustEnv("PROVIDER_BASE_URL").replace(/\/+$/, "");
-const PUBLIC_TOKEN = mustEnv("PUBLIC_TOKEN");
-const OPERATOR_KEY = mustEnv("OPERATOR_KEY");
+function providerBaseUrl(): string {
+  return mustEnv("PROVIDER_BASE_URL").replace(/\/+$/, "");
+}
 
-function providerHeaders() {
+function publicHeaders(): Record<string, string> {
   return {
-    "x-public-token": PUBLIC_TOKEN,
-    "x-operator-key": OPERATOR_KEY,
     "content-type": "application/json",
+    "x-public-token": mustEnv("PUBLIC_TOKEN"),
+    "x-operator-key": mustEnv("OPERATOR_KEY"),
   };
 }
 
-export async function providerGetGames(): Promise<Game[]> {
-  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/games`, {
-    method: "GET",
-    // endpoint operator-signed (pas public) -> il faut API KEY + SIGNATURE normalement
-    // MAIS ton provider expose /v1/public/games via OperatorAuthGuard (x-api-key + signature).
-    // Pour éviter ça côté game-server, on passe par un endpoint PUBLIC côté provider:
-    // => on doit ajouter un endpoint /v1/public/games côté provider (si pas déjà fait).
-    //
-    // Donc si tu n'as pas /v1/public/games, dis-moi et je te donne le patch provider.
-    headers: providerHeaders(),
-    cache: "no-store",
-  });
-
-  const data = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(data?.message || data?.error || "providerGetGames failed");
-  return Array.isArray(data) ? data : [];
+async function parseRes(res: Response): Promise<Json> {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return { raw: text };
+  }
 }
 
-export async function providerCreateSession(input: {
-  gameCode: string;
-  playerExternalId: string;
-  currency: string;
-}) {
-  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/session`, {
-    method: "POST",
-    headers: providerHeaders(),
-    body: JSON.stringify(input),
+export async function providerGetGames(): Promise<Json> {
+  const url = `${providerBaseUrl()}/v1/provider/games`;
+  const res = await fetch(url, {
+    method: "GET",
+    // games endpoint est signé normalement, mais ton game-server l’utilise en “liste”
+    // Si tu veux strict, on peut ajouter un endpoint public “/public/games”.
+    headers: publicHeaders(),
+    cache: "no-store",
   });
-
-  const data = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(data?.message || data?.error || "providerCreateSession failed");
+  const data = await parseRes(res);
+  if (!res.ok) throw new Error(data?.message || "providerGetGames failed");
   return data;
 }
 
-export async function providerPublicPlay(input: {
-  sessionId: string;
-  bet: number;
-  clientSeed?: string;
-  idempotencyKey?: string;
-}) {
-  const r = await fetch(`${PROVIDER_BASE_URL}/v1/public/play`, {
+export async function providerCreateSession(body: any): Promise<Json> {
+  const url = `${providerBaseUrl()}/v1/public/session`;
+  const res = await fetch(url, {
     method: "POST",
-    headers: providerHeaders(),
-    body: JSON.stringify(input),
+    headers: publicHeaders(),
+    body: JSON.stringify(body ?? {}),
+    cache: "no-store",
   });
+  const data = await parseRes(res);
+  if (!res.ok) throw new Error(data?.message || "providerCreateSession failed");
+  return data;
+}
 
-  const data = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(data?.message || data?.error || "providerPublicPlay failed");
+export async function providerPlay(body: any): Promise<Json> {
+  const url = `${providerBaseUrl()}/v1/public/play`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: publicHeaders(),
+    body: JSON.stringify(body ?? {}),
+    cache: "no-store",
+  });
+  const data = await parseRes(res);
+  if (!res.ok) throw new Error(data?.message || "providerPlay failed");
   return data;
 }
