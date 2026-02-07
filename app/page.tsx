@@ -1,48 +1,47 @@
-"use client";
+import { isAdminAuthed } from '../lib/admin-auth'
+import { adminLogin } from './actions'
+import { Button, Card, Input } from '../components/ui'
+import AdminDashboard from './admin-dashboard'
 
-import React, { useEffect, useState } from "react";
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-type Game = { id: string; kind: string; rtp: number };
+export default async function HomePage() {
+  const authed = isAdminAuthed()
 
-export default function Home() {
-  const [games, setGames] = useState<Game[]>([]);
-  const [error, setError] = useState("");
+  if (!authed) {
+    return (
+      <main className="min-h-screen flex items-center justify-center p-6">
+        <Card className="w-full max-w-md p-6">
+          <div className="text-lg font-bold">Accès admin</div>
+          <div className="mt-1 text-sm text-white/70">AUTH=false</div>
 
-  async function load() {
-    setError("");
-    try {
-      const res = await fetch("/api/games", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "games error");
-      setGames(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      setError(e?.message || "games error");
-    }
+          <form action={adminLogin} className="mt-6 space-y-3">
+            <div className="space-y-1">
+              <label htmlFor="token" className="text-xs font-semibold text-white/80">
+                ADMIN_TOKEN
+              </label>
+              <Input id="token" name="token" type="password" autoComplete="off" required />
+            </div>
+
+            <Button type="submit" className="w-full">
+              Se connecter
+            </Button>
+          </form>
+        </Card>
+      </main>
+    )
   }
 
-  useEffect(() => {
-    load();
-  }, []);
-
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", color: "white", background: "#0b0f1a", minHeight: "100vh" }}>
-      <h1 style={{ margin: 0 }}>ZENYX Game Server</h1>
-      <p style={{ opacity: 0.8 }}>Ouvre /play?sessionId=... dans un iframe pour lancer un jeu.</p>
-
-      {error ? <div style={{ color: "tomato" }}>❌ {error}</div> : null}
-
-      <button onClick={load} style={{ padding: "10px 12px", borderRadius: 12 }}>
-        Rafraîchir la liste
-      </button>
-
-      <h2>Jeux disponibles</h2>
-      <ul>
-        {games.map((g) => (
-          <li key={g.id}>
-            <b>{g.id}</b> — {g.kind} — RTP {g.rtp}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+    <main className="min-h-screen p-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="text-sm text-white/70">AUTH=true</div>
+        <div className="mt-2 text-sm text-white/60">RENDER=AdminDashboard</div>
+        <div className="mt-6">
+          <AdminDashboard />
+        </div>
+      </div>
+    </main>
+  )
 }
