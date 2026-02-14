@@ -2,12 +2,14 @@ import { redirect } from "next/navigation"
 
 export const dynamic = "force-dynamic"
 
-type PlayResult = {
+type ProviderResponse = {
   win?: number
   balance?: number
+  playerExternalId?: string
+  currency?: string
 }
 
-async function spinRequest(sessionId: string): Promise<PlayResult> {
+async function spinRequest(sessionId: string): Promise<ProviderResponse> {
   const res = await fetch(
     `${process.env.PROVIDER_BASE_URL}/v1/public/play`,
     {
@@ -46,7 +48,7 @@ export default async function PlayPage({
     redirect("/")
   }
 
-  let result: PlayResult | null = null
+  let result: ProviderResponse | null = null
 
   if (searchParams.spin === "1") {
     result = await spinRequest(sessionId)
@@ -81,7 +83,9 @@ export default async function PlayPage({
 
       {result && (
         <div style={{ marginTop: "20px", fontSize: "20px" }}>
-          Win: {result.win ?? 0} | Balance: {result.balance ?? 0}
+          <div>Win: {result.win ?? 0}</div>
+          <div>Balance: {result.balance ?? 0}</div>
+          <div>Currency: {result.currency ?? "BRL"}</div>
         </div>
       )}
     </main>
