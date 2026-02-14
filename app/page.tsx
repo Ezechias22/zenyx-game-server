@@ -6,11 +6,9 @@ type Game = {
   name: string
   kind: string
   rtp?: number
-  assets?: {
-    cover?: string
-    background?: string
-    symbols?: string[]
-  }
+  volatility?: string
+  ui?: { aspectRatio?: string; width?: number; height?: number }
+  assets?: { cover?: string; background?: string; symbols?: string[] }
 }
 
 async function getGames(): Promise<Game[]> {
@@ -29,7 +27,8 @@ async function getGames(): Promise<Game[]> {
   return list
 }
 
-export default async function Lobby() {
+export default async function LobbyPage() {
+  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
   const games = await getGames()
   const appName = process.env.NEXT_PUBLIC_APP_NAME || "ZENYX Casino"
 
@@ -37,16 +36,16 @@ export default async function Lobby() {
     <main
       style={{
         minHeight: "100vh",
-        background: "#0b0f1a",
+        background: "radial-gradient(1200px 700px at 20% 0%, rgba(124,58,237,0.18), transparent 60%), #0b0f1a",
         color: "#fff",
         padding: 28
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontWeight: 950, fontSize: 30, letterSpacing: 0.2 }}>🎰 {appName}</div>
+          <div style={{ fontWeight: 950, fontSize: 30 }}>🎰 {appName}</div>
           <div style={{ opacity: 0.7, marginTop: 6, fontSize: 13 }}>
-            Sélectionne un jeu pour démarrer une session.
+            Lobby production • covers + symbols préchargés
           </div>
         </div>
       </div>
@@ -60,9 +59,11 @@ export default async function Lobby() {
         }}
       >
         {games.map((g) => {
-          const coverPath = g.assets?.cover || ""
-          const coverUrl = coverPath ? `/api/assets?path=${encodeURIComponent(coverPath)}` : ""
-          const rtpPct = typeof g.rtp === "number" ? `${Math.round(g.rtp * 100)}%` : "—"
+          const cover = g.assets?.cover ? `${base}${g.assets.cover}` : ""
+          const symbols = Array.isArray(g.assets?.symbols) ? g.assets!.symbols! : []
+
+          const rtpPct =
+            typeof g.rtp === "number" && Number.isFinite(g.rtp) ? `${Math.round(g.rtp * 100)}%` : "—"
 
           return (
             <a
@@ -76,15 +77,21 @@ export default async function Lobby() {
                 border: "1px solid rgba(255,255,255,0.08)",
                 borderRadius: 16,
                 overflow: "hidden",
-                boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
-                transform: "translateZ(0)"
+                boxShadow: "0 18px 50px rgba(0,0,0,0.45)"
               }}
             >
+              {/* ✅ Preload symbols (hidden) */}
+              {symbols.slice(0, 20).map((p) => (
+                <link key={p} rel="preload" as="image" href={`${base}${p}`} />
+              ))}
+
               <div style={{ position: "relative" }}>
-                {coverUrl ? (
+                {cover ? (
                   <img
-                    src={coverUrl}
+                    src={cover}
                     alt={g.name}
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
                     style={{
                       width: "100%",
                       height: 180,
@@ -100,8 +107,7 @@ export default async function Lobby() {
                   style={{
                     position: "absolute",
                     inset: 0,
-                    background:
-                      "linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.75) 100%)"
+                    background: "linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.75) 100%)"
                   }}
                 />
               </div>

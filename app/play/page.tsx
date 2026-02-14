@@ -8,15 +8,7 @@ type Game = {
   id: string
   name: string
   kind: string
-  assets?: {
-    cover?: string
-    background?: string
-    // provider may send symbols as:
-    // - string[] (list of paths)
-    // - Record<string,string> (map)
-    // - { list: string[] } (wrapped)
-    symbols?: unknown
-  }
+  assets?: { cover?: string; background?: string; symbols?: string[] }
 }
 
 async function getGames(): Promise<Game[]> {
@@ -33,60 +25,20 @@ async function getGames(): Promise<Game[]> {
   return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
 }
 
-function normalizeSymbols(input: unknown): string[] {
-  if (!input) return []
-
-  // string[]
-  if (Array.isArray(input)) {
-    return input.filter((x) => typeof x === "string") as string[]
-  }
-
-  // { list: string[] } or { symbols: string[] }
-  if (typeof input === "object" && input !== null) {
-    const anyObj = input as Record<string, unknown>
-
-    const maybeList = anyObj.list || anyObj.symbols
-    if (Array.isArray(maybeList)) {
-      return maybeList.filter((x) => typeof x === "string") as string[]
-    }
-
-    // map { wild: "/assets/.../wild.png", ... }
-    const values = Object.values(anyObj).filter((v) => typeof v === "string") as string[]
-    if (values.length) return values
-  }
-
-  return []
-}
-
 export default async function PlayPage({
   searchParams
 }: {
-  searchParams: { sessionId?: string; gameCode?: string; launchUrl?: string }
+  searchParams: { sessionId?: string }
 }) {
   const sessionId =
     searchParams.sessionId && searchParams.sessionId.length >= 10 ? searchParams.sessionId : ""
-  const gameCode = searchParams.gameCode || ""
-
-  if (!sessionId || !gameCode) redirect("/")
+  if (!sessionId) redirect("/")
 
   const games = await getGames()
-  const game = games.find((g) => g.id === gameCode)
-  if (!game) redirect("/")
 
-  const bgPath = game.assets?.background || ""
-  const bgUrl = bgPath ? `/api/assets?path=${encodeURIComponent(bgPath)}` : ""
+  // sessionId alone doesn't tell gameCode; provider /v1/launch will iframe back here with sessionId
+  // We still render a stage UI; background will be generic.
+  const bg = "radial-gradient(1200px 700px at 20% 0%, rgba(124,58,237,0.18), transparent 60%), #0b0f1a"
 
-  const launchUrl = searchParams.launchUrl || ""
-  const symbols = normalizeSymbols(game.assets?.symbols)
-
-  return (
-    <PlayClient
-      sessionId={sessionId}
-      gameName={game.name}
-      kind={game.kind}
-      backgroundUrl={bgUrl}
-      launchUrl={launchUrl}
-      symbols={symbols}
-    />
-  )
+  return <PlayClient sessionId={sessionId} backgroundStyle={bg} />
 }

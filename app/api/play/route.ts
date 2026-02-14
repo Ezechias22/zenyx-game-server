@@ -9,6 +9,12 @@ const BodySchema = z.object({
   bet: z.number().positive().max(1_000_000)
 })
 
+function mustEnv(name: string): string {
+  const v = process.env[name]
+  if (!v) throw new Error(`Missing env: ${name}`)
+  return v
+}
+
 export async function POST(req: NextRequest) {
   const json = await req.json().catch(() => null)
   const parsed = BodySchema.safeParse(json)
@@ -19,13 +25,14 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
+  const base = mustEnv("PROVIDER_BASE_URL").replace(/\/+$/, "")
+
   const upstream = await fetch(`${base}/v1/public/play`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-public-token": process.env.PUBLIC_TOKEN!,
-      "x-operator-key": process.env.OPERATOR_KEY!
+      "x-public-token": mustEnv("PUBLIC_TOKEN"),
+      "x-operator-key": mustEnv("OPERATOR_KEY")
     },
     body: JSON.stringify(parsed.data),
     cache: "no-store"
