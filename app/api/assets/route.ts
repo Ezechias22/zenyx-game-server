@@ -1,46 +1,30 @@
-export const runtime = "nodejs"
+import { NextRequest } from "next/server"
+
 export const dynamic = "force-dynamic"
 
-import { getEnvSafe } from "@/lib/runtime-env"
+export async function GET(req: NextRequest) {
+  const path = req.nextUrl.searchParams.get("path")
 
-export async function GET(req: Request) {
-  const env = getEnvSafe()
-  const { missing } = env
-
-  if (missing.includes("PROVIDER_BASE_URL")) {
-    return Response.json({ error: "Missing PROVIDER_BASE_URL" }, { status: 500 })
+  if (!path) {
+    return new Response("Missing path", { status: 400 })
   }
 
-  // ici TypeScript est sûr que c'est défini
-  const PROVIDER_BASE_URL = env.PROVIDER_BASE_URL!
+  const providerBase = process.env.PROVIDER_BASE_URL!
 
-  const { searchParams } = new URL(req.url)
-  const path = searchParams.get("path")
+  const fullUrl = `${providerBase}${path}`
 
-  if (!path || !path.startsWith("/assets/")) {
-    return Response.json({ error: "Invalid asset path" }, { status: 400 })
+  const res = await fetch(fullUrl)
+
+  if (!res.ok) {
+    return new Response("Asset error", { status: 500 })
   }
 
-  const base = PROVIDER_BASE_URL.replace(/\/+$/, "")
-  const upstreamUrl = `${base}${path}`
+  const buffer = await res.arrayBuffer()
 
-  const upstream = await fetch(upstreamUrl, { cache: "no-store" })
-
-  if (!upstream.ok) {
-    const text = await upstream.text().catch(() => "")
-    return new Response(text || "Upstream error", { status: upstream.status })
-  }
-
-  const contentType =
-    upstream.headers.get("content-type") || "application/octet-stream"
-
-  const body = await upstream.arrayBuffer()
-
-  return new Response(body, {
-    status: 200,
+  return new Response(buffer, {
     headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "public, max-age=600"
+      "Content-Type": res.headers.get("content-type") || "image/png",
+      "Cache-Control": "public, max-age=86400"
     }
   })
 }

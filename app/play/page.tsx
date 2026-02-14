@@ -5,7 +5,6 @@ export const dynamic = "force-dynamic"
 type ProviderResponse = {
   win?: number
   balance?: number
-  playerExternalId?: string
   currency?: string
 }
 
@@ -27,11 +26,13 @@ async function spinRequest(sessionId: string): Promise<ProviderResponse> {
     }
   )
 
-  if (!res.ok) {
-    throw new Error("Spin failed")
-  }
+  if (!res.ok) throw new Error("Spin failed")
 
   return res.json()
+}
+
+async function getGameFromSession(sessionId: string) {
+  return sessionId.split("_")[1] || ""
 }
 
 export default async function PlayPage({
@@ -44,9 +45,7 @@ export default async function PlayPage({
       ? searchParams.sessionId
       : null
 
-  if (!sessionId) {
-    redirect("/")
-  }
+  if (!sessionId) redirect("/")
 
   let result: ProviderResponse | null = null
 

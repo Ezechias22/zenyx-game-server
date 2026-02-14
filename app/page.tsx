@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation"
+import Link from "next/link"
 
 export const dynamic = "force-dynamic"
 
@@ -6,131 +6,88 @@ type Game = {
   id: string
   name: string
   kind: string
-  assets?: {
-    cover?: string
-    background?: string
+  rtp: number
+  assets: {
+    cover: string
+    background: string
+    symbols?: string[]
   }
 }
 
-async function fetchGames(): Promise<Game[]> {
-  const base = process.env.PROVIDER_BASE_URL!
-  const res = await fetch(`${base}/v1/public/games`, {
-    headers: {
-      "x-public-token": process.env.PUBLIC_TOKEN!,
-      "x-operator-key": process.env.OPERATOR_KEY!
-    },
-    cache: "no-store"
-  })
+async function getGames(): Promise<Game[]> {
+  const res = await fetch(
+    `${process.env.PROVIDER_BASE_URL}/v1/public/games`,
+    {
+      headers: {
+        "x-public-token": process.env.PUBLIC_TOKEN!,
+        "x-operator-key": process.env.OPERATOR_KEY!
+      },
+      cache: "no-store"
+    }
+  )
 
-  if (!res.ok) throw new Error("Failed to load games")
-
-  const data = await res.json()
-  return Array.isArray(data) ? data : data.games || []
-}
-
-async function createSession(gameCode: string) {
-  const base = process.env.PROVIDER_BASE_URL!
-
-  const res = await fetch(`${base}/v1/public/session`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-public-token": process.env.PUBLIC_TOKEN!,
-      "x-operator-key": process.env.OPERATOR_KEY!
-    },
-    body: JSON.stringify({
-      gameCode,
-      playerExternalId: "player_demo_123",
-      currency: "BRL"
-    })
-  })
-
-  if (!res.ok) throw new Error("Session failed")
+  if (!res.ok) return []
 
   return res.json()
 }
 
-export default async function Lobby({
-  searchParams
-}: {
-  searchParams?: { start?: string }
-}) {
-  if (searchParams?.start) {
-    const session = await createSession(searchParams.start)
-    redirect(`/play?sessionId=${session.sessionId}`)
-  }
-
-  const games = await fetchGames()
-  const base = process.env.PROVIDER_BASE_URL!.replace(/\/+$/, "")
+export default async function Lobby() {
+  const games = await getGames()
 
   return (
-    <main style={styles.wrapper}>
-      <h1 style={styles.title}>ZENYX CASINO</h1>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#0b0f1a",
+        padding: "40px",
+        color: "#fff"
+      }}
+    >
+      <h1 style={{ fontSize: "32px", marginBottom: "30px" }}>
+        🎰 ZENYX GAMES
+      </h1>
 
-      <div style={styles.grid}>
-        {games.map((game) => {
-          const cover = `${base}${game.assets?.cover || ""}`
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
+          gap: "20px"
+        }}
+      >
+        {games.map((game) => (
+          <Link
+            key={game.id}
+            href={`/api/create-session?gameCode=${game.id}`}
+            style={{
+              textDecoration: "none",
+              color: "white",
+              background: "#111827",
+              borderRadius: "12px",
+              overflow: "hidden",
+              transition: "transform 0.2s ease"
+            }}
+          >
+            <img
+              src={`/api/assets?path=${encodeURIComponent(
+                game.assets.cover
+              )}`}
+              alt={game.name}
+              style={{
+                width: "100%",
+                height: "200px",
+                objectFit: "cover"
+              }}
+            />
 
-          return (
-            <a
-              key={game.id}
-              href={`/?start=${game.id}`}
-              style={styles.card}
-            >
-              <img
-                src={cover}
-                alt={game.name}
-                style={styles.image}
-              />
-              <div style={styles.overlay}>
-                <span>{game.name}</span>
+            <div style={{ padding: "15px" }}>
+              <div style={{ fontWeight: 700 }}>{game.name}</div>
+              <div style={{ opacity: 0.6, fontSize: "14px" }}>
+                {game.kind} — RTP {(game.rtp * 100).toFixed(2)}%
               </div>
-            </a>
-          )
-        })}
+            </div>
+          </Link>
+        ))}
       </div>
     </main>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  wrapper: {
-    minHeight: "100vh",
-    background: "#0b0f1a",
-    padding: "40px"
-  },
-  title: {
-    color: "#fff",
-    marginBottom: "30px",
-    fontSize: "32px",
-    fontWeight: 800
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
-    gap: "20px"
-  },
-  card: {
-    position: "relative",
-    borderRadius: "14px",
-    overflow: "hidden",
-    textDecoration: "none",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
-    transition: "transform 0.2s ease"
-  },
-  image: {
-    width: "100%",
-    height: "160px",
-    objectFit: "cover",
-    display: "block"
-  },
-  overlay: {
-    position: "absolute",
-    bottom: 0,
-    width: "100%",
-    padding: "12px",
-    background: "linear-gradient(transparent, rgba(0,0,0,0.8))",
-    color: "#fff",
-    fontWeight: 600
-  }
 }
