@@ -1,72 +1,56 @@
-"use client"
+import { redirect } from "next/navigation"
 
-import { useEffect, useMemo, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+export const dynamic = "force-dynamic"
 
 type PlayResult = {
   win?: number
   balance?: number
 }
 
-export default function PlayPage() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-
-  const sessionId = useMemo(() => {
-    const s = searchParams.get("sessionId")
-    return s && s.length >= 10 ? s : null
-  }, [searchParams])
-
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<PlayResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!sessionId) {
-      router.replace("/")
+async function spinRequest(sessionId: string): Promise<PlayResult> {
+  const res = await fetch(
+    `${process.env.PROVIDER_BASE_URL}/v1/public/play`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-public-token": process.env.PUBLIC_TOKEN!,
+        "x-operator-key": process.env.OPERATOR_KEY!
+      },
+      body: JSON.stringify({
+        sessionId,
+        bet: 1
+      }),
+      cache: "no-store"
     }
-  }, [sessionId, router])
+  )
 
-  async function spin() {
-    if (!sessionId) return
-
-    setLoading(true)
-    setError(null)
-
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_PROVIDER_BASE_URL}/v1/public/play`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-public-token": process.env.NEXT_PUBLIC_PUBLIC_TOKEN!,
-            "x-operator-key": process.env.NEXT_PUBLIC_OPERATOR_KEY!
-          },
-          body: JSON.stringify({
-            sessionId,
-            bet: 1
-          })
-        }
-      )
-
-      if (!res.ok) {
-        throw new Error("Spin failed")
-      }
-
-      const data = await res.json()
-      setResult({
-        win: data.win,
-        balance: data.balance
-      })
-    } catch {
-      setError("Spin error")
-    } finally {
-      setLoading(false)
-    }
+  if (!res.ok) {
+    throw new Error("Spin failed")
   }
 
-  if (!sessionId) return null
+  return res.json()
+}
+
+export default async function PlayPage({
+  searchParams
+}: {
+  searchParams: { sessionId?: string; spin?: string }
+}) {
+  const sessionId =
+    searchParams.sessionId && searchParams.sessionId.length >= 10
+      ? searchParams.sessionId
+      : null
+
+  if (!sessionId) {
+    redirect("/")
+  }
+
+  let result: PlayResult | null = null
+
+  if (searchParams.spin === "1") {
+    result = await spinRequest(sessionId)
+  }
 
   return (
     <main
@@ -80,31 +64,24 @@ export default function PlayPage() {
         color: "#fff"
       }}
     >
-      <button
-        onClick={spin}
-        disabled={loading}
+      <a
+        href={`/play?sessionId=${sessionId}&spin=1`}
         style={{
           padding: "14px 28px",
           background: "#7c3aed",
-          border: "none",
           borderRadius: "10px",
           fontSize: "18px",
           fontWeight: 700,
-          cursor: "pointer"
+          textDecoration: "none",
+          color: "#fff"
         }}
       >
-        {loading ? "Spinning..." : "SPIN"}
-      </button>
+        SPIN
+      </a>
 
       {result && (
         <div style={{ marginTop: "20px", fontSize: "20px" }}>
           Win: {result.win ?? 0} | Balance: {result.balance ?? 0}
-        </div>
-      )}
-
-      {error && (
-        <div style={{ marginTop: "20px", color: "red" }}>
-          {error}
         </div>
       )}
     </main>
