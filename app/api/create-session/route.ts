@@ -6,7 +6,7 @@ export async function GET(req: NextRequest) {
   const gameCode = req.nextUrl.searchParams.get("gameCode")
 
   if (!gameCode) {
-    return NextResponse.redirect(new URL("/", req.url))
+    return NextResponse.redirect("/")
   }
 
   const res = await fetch(
@@ -27,12 +27,13 @@ export async function GET(req: NextRequest) {
   )
 
   if (!res.ok) {
-    return NextResponse.redirect(new URL("/", req.url))
+    return NextResponse.redirect("/")
   }
 
   const data = await res.json()
 
+  // ✅ REDIRECT RELATIVE (SAFE)
   return NextResponse.redirect(
-    new URL(`/play?sessionId=${data.sessionId}`, req.url)
+    new URL(`/play?sessionId=${data.sessionId}`, req.nextUrl.origin)
   )
 }
