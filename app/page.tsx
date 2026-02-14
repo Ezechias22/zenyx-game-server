@@ -1,97 +1,136 @@
-import { fetchGames } from "@/lib/provider"
+import { redirect } from "next/navigation"
+
+export const dynamic = "force-dynamic"
 
 type Game = {
   id: string
   name: string
   kind: string
-  rtp: number | string
-  assets?: { cover?: string; background?: string }
+  assets?: {
+    cover?: string
+    background?: string
+  }
 }
 
-export const dynamic = "force-dynamic"
+async function fetchGames(): Promise<Game[]> {
+  const base = process.env.PROVIDER_BASE_URL!
+  const res = await fetch(`${base}/v1/public/games`, {
+    headers: {
+      "x-public-token": process.env.PUBLIC_TOKEN!,
+      "x-operator-key": process.env.OPERATOR_KEY!
+    },
+    cache: "no-store"
+  })
 
-function normalizeGames(payload: any): Game[] {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.games)) return payload.games
-  if (Array.isArray(payload?.data)) return payload.data
-  return []
+  if (!res.ok) throw new Error("Failed to load games")
+
+  const data = await res.json()
+  return Array.isArray(data) ? data : data.games || []
 }
 
-export default async function Home() {
-  const payload: any = await fetchGames()
-  const games = normalizeGames(payload)
+async function createSession(gameCode: string) {
+  const base = process.env.PROVIDER_BASE_URL!
+
+  const res = await fetch(`${base}/v1/public/session`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-public-token": process.env.PUBLIC_TOKEN!,
+      "x-operator-key": process.env.OPERATOR_KEY!
+    },
+    body: JSON.stringify({
+      gameCode,
+      playerExternalId: "player_demo_123",
+      currency: "BRL"
+    })
+  })
+
+  if (!res.ok) throw new Error("Session failed")
+
+  return res.json()
+}
+
+export default async function Lobby({
+  searchParams
+}: {
+  searchParams?: { start?: string }
+}) {
+  if (searchParams?.start) {
+    const session = await createSession(searchParams.start)
+    redirect(`/play?sessionId=${session.sessionId}`)
+  }
+
+  const games = await fetchGames()
+  const base = process.env.PROVIDER_BASE_URL!.replace(/\/+$/, "")
 
   return (
-    <main style={{ padding: 40, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ marginBottom: 20 }}>🎰 ZENYX GAMES</h1>
+    <main style={styles.wrapper}>
+      <h1 style={styles.title}>ZENYX CASINO</h1>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-          gap: 20
-        }}
-      >
+      <div style={styles.grid}>
         {games.map((game) => {
-          const coverPath = game.assets?.cover || ""
-          const coverUrl = coverPath
-            ? `/api/assets?path=${encodeURIComponent(coverPath)}`
-            : ""
+          const cover = `${base}${game.assets?.cover || ""}`
 
           return (
-            <div
+            <a
               key={game.id}
-              style={{
-                background: "#111827",
-                borderRadius: 16,
-                overflow: "hidden",
-                boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
-              }}
+              href={`/?start=${game.id}`}
+              style={styles.card}
             >
-              {coverUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={coverUrl}
-                  alt={game.name}
-                  style={{
-                    width: "100%",
-                    height: 180,
-                    objectFit: "cover",
-                    display: "block"
-                  }}
-                />
-              ) : (
-                <div style={{ height: 180, background: "#0b1220" }} />
-              )}
-
-              <div style={{ padding: 16 }}>
-                <h3 style={{ margin: "0 0 8px 0" }}>{game.name}</h3>
-
-                <div style={{ fontSize: 13, opacity: 0.8 }}>
-                  <div>Type: {game.kind}</div>
-                  <div>RTP: {String(game.rtp)}</div>
-                </div>
-
-                <a
-                  href={`/play?gameCode=${encodeURIComponent(game.id)}`}
-                  style={{
-                    display: "inline-block",
-                    marginTop: 12,
-                    padding: "8px 14px",
-                    background: "#7c3aed",
-                    color: "white",
-                    borderRadius: 8,
-                    textDecoration: "none",
-                    fontWeight: 600
-                  }}
-                >
-                  Play
-                </a>
+              <img
+                src={cover}
+                alt={game.name}
+                style={styles.image}
+              />
+              <div style={styles.overlay}>
+                <span>{game.name}</span>
               </div>
-            </div>
+            </a>
           )
         })}
       </div>
     </main>
   )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  wrapper: {
+    minHeight: "100vh",
+    background: "#0b0f1a",
+    padding: "40px"
+  },
+  title: {
+    color: "#fff",
+    marginBottom: "30px",
+    fontSize: "32px",
+    fontWeight: 800
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
+    gap: "20px"
+  },
+  card: {
+    position: "relative",
+    borderRadius: "14px",
+    overflow: "hidden",
+    textDecoration: "none",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+    transition: "transform 0.2s ease"
+  },
+  image: {
+    width: "100%",
+    height: "160px",
+    objectFit: "cover",
+    display: "block"
+  },
+  overlay: {
+    position: "absolute",
+    bottom: 0,
+    width: "100%",
+    padding: "12px",
+    background: "linear-gradient(transparent, rgba(0,0,0,0.8))",
+    color: "#fff",
+    fontWeight: 600
+  }
 }
