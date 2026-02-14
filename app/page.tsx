@@ -1,93 +1,84 @@
-type AnyGame = Record<string, any>
-
-function normalizeGames(payload: any): AnyGame[] {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.games)) return payload.games
-  if (Array.isArray(payload?.data)) return payload.data
-  return []
+type Game = {
+  id: string
+  name: string
+  kind: string
+  rtp: number | string
+  assets?: {
+    cover?: string
+    background?: string
+  }
 }
 
-function getAssetUrl(providerBaseUrl: string, path?: string) {
-  if (!path) return ""
-  // path attendu: "/assets/egypt_riches/cover.png" etc.
-  return `${providerBaseUrl}${path}`
-}
+export const dynamic = "force-dynamic"
 
 export default async function Home() {
-  const providerBaseUrl = process.env.PROVIDER_BASE_URL || ""
+  const providerBaseUrl = process.env.PROVIDER_BASE_URL!
 
-  // Appelle via notre API (headers côté serveur, jamais exposés)
-  const res = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL ?? ""}/api/games`, { cache: "no-store" })
-  const payload = await res.json().catch(() => null)
+  const res = await fetch(
+    "https://zenyx-game-server-production-666e.up.railway.app/api/games",
+    { cache: "no-store" }
+  )
 
-  const games = normalizeGames(payload)
+  const games: Game[] = await res.json()
 
   return (
-    <main style={{ padding: 32, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ marginBottom: 8 }}>ZENYX Games Catalog</h1>
-      <div style={{ opacity: 0.75, marginBottom: 20 }}>
-        Games: <b>{games.length}</b>
-      </div>
+    <main style={{ padding: 40, maxWidth: 1200, margin: "0 auto" }}>
+      <h1 style={{ marginBottom: 30 }}>🎰 ZENYX GAMES</h1>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
-        {games.map((g: AnyGame) => {
-          const code = g.gameCode || g.code || g.id
-          const name = g.name || g.title || code
-          const kind = g.kind || g.type || "-"
-          const rtp = g.rtp ?? g.math?.rtp ?? "-"
-          const cover = getAssetUrl(providerBaseUrl, g.assets?.cover || g.cover)
-          const bg = getAssetUrl(providerBaseUrl, g.assets?.background || g.background)
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+          gap: 20
+        }}
+      >
+        {games.map((game) => {
+          const coverUrl = `${providerBaseUrl}${game.assets?.cover || ""}`
 
           return (
-            <div key={String(code)} style={{ background: "#111827", borderRadius: 14, overflow: "hidden" }}>
-              {cover ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={cover} alt={name} style={{ width: "100%", height: 160, objectFit: "cover" }} />
-              ) : (
-                <div style={{ height: 160, background: "#0b1220" }} />
-              )}
+            <div
+              key={game.id}
+              style={{
+                background: "#111827",
+                borderRadius: 16,
+                overflow: "hidden",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
+              }}
+            >
+              {/* Cover */}
+              <img
+                src={coverUrl}
+                alt={game.name}
+                style={{
+                  width: "100%",
+                  height: 180,
+                  objectFit: "cover"
+                }}
+              />
 
-              <div style={{ padding: 14 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{name}</div>
-                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-                  <div>code: <b>{String(code)}</b></div>
-                  <div>kind: <b>{String(kind)}</b></div>
-                  <div>rtp: <b>{String(rtp)}</b></div>
+              <div style={{ padding: 16 }}>
+                <h3 style={{ margin: "0 0 8px 0" }}>{game.name}</h3>
+
+                <div style={{ fontSize: 13, opacity: 0.7 }}>
+                  <div>Type: {game.kind}</div>
+                  <div>RTP: {game.rtp}</div>
                 </div>
 
-                <div style={{ display: "flex", gap: 8 }}>
-                  <a
-                    href={`/play?gameCode=${encodeURIComponent(String(code))}`}
-                    style={{
-                      padding: "8px 12px",
-                      background: "#7c3aed",
-                      borderRadius: 10,
-                      color: "white",
-                      textDecoration: "none",
-                      fontWeight: 600
-                    }}
-                  >
-                    Play
-                  </a>
-
-                  {bg ? (
-                    <a
-                      href={bg}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        padding: "8px 12px",
-                        background: "#0b1220",
-                        borderRadius: 10,
-                        color: "white",
-                        textDecoration: "none",
-                        opacity: 0.9
-                      }}
-                    >
-                      Background
-                    </a>
-                  ) : null}
-                </div>
+                <a
+                  href={`/play?gameCode=${game.id}`}
+                  style={{
+                    display: "inline-block",
+                    marginTop: 12,
+                    padding: "8px 14px",
+                    background: "#7c3aed",
+                    color: "white",
+                    borderRadius: 8,
+                    textDecoration: "none",
+                    fontWeight: 600
+                  }}
+                >
+                  Play
+                </a>
               </div>
             </div>
           )
