@@ -70,10 +70,11 @@ export default function PlayPage({
       setErr("Login d'abord (token manquant).")
       return
     }
-    if (!sessionId) {
-      setErr("sessionId manquant. Soit tu arrives via launchUrl /play?sessionId=..., soit tu cliques Create Session.")
+    if (!sessionId || sessionId.length < 10) {
+     setErr("sessionId invalide. Clique Create Session ou ouvre /play?sessionId=sess_xxx")
       return
     }
+
     if (!gameCode) {
       setErr("gameCode manquant.")
       return
