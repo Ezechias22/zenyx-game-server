@@ -23,12 +23,10 @@ async function getGames(): Promise<Game[]> {
 
   if (!res.ok) return []
   const data = await res.json().catch(() => null)
-  const list = Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
-  return list
+  return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
 }
 
 export default async function LobbyPage() {
-  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
   const games = await getGames()
   const appName = process.env.NEXT_PUBLIC_APP_NAME || "ZENYX Casino"
 
@@ -36,7 +34,8 @@ export default async function LobbyPage() {
     <main
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(1200px 700px at 20% 0%, rgba(124,58,237,0.18), transparent 60%), #0b0f1a",
+        background:
+          "radial-gradient(1200px 700px at 20% 0%, rgba(124,58,237,0.18), transparent 60%), #0b0f1a",
         color: "#fff",
         padding: 28
       }}
@@ -45,7 +44,7 @@ export default async function LobbyPage() {
         <div>
           <div style={{ fontWeight: 950, fontSize: 30 }}>🎰 {appName}</div>
           <div style={{ opacity: 0.7, marginTop: 6, fontSize: 13 }}>
-            Lobby production • covers + symbols préchargés
+            Lobby production • covers proxifiés (same-origin)
           </div>
         </div>
       </div>
@@ -59,9 +58,10 @@ export default async function LobbyPage() {
         }}
       >
         {games.map((g) => {
-          const cover = g.assets?.cover ? `${base}${g.assets.cover}` : ""
-          const symbols = Array.isArray(g.assets?.symbols) ? g.assets!.symbols! : []
+          const coverPath = g.assets?.cover || ""
+          const coverSrc = coverPath ? `/api/assets?path=${encodeURIComponent(coverPath)}` : ""
 
+          const symbols = Array.isArray(g.assets?.symbols) ? g.assets!.symbols! : []
           const rtpPct =
             typeof g.rtp === "number" && Number.isFinite(g.rtp) ? `${Math.round(g.rtp * 100)}%` : "—"
 
@@ -77,27 +77,33 @@ export default async function LobbyPage() {
                 border: "1px solid rgba(255,255,255,0.08)",
                 borderRadius: 16,
                 overflow: "hidden",
-                boxShadow: "0 18px 50px rgba(0,0,0,0.45)"
+                boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+                transform: "translateZ(0)"
               }}
             >
-              {/* ✅ Preload symbols (hidden) */}
-              {symbols.slice(0, 20).map((p) => (
-                <link key={p} rel="preload" as="image" href={`${base}${p}`} />
+              {/* ✅ Preload symbols (same-origin proxy) */}
+              {symbols.slice(0, 24).map((p) => (
+                <link
+                  key={p}
+                  rel="preload"
+                  as="image"
+                  href={`/api/assets?path=${encodeURIComponent(p)}`}
+                />
               ))}
 
               <div style={{ position: "relative" }}>
-                {cover ? (
+                {coverSrc ? (
                   <img
-                    src={cover}
+                    src={coverSrc}
                     alt={g.name}
-                    referrerPolicy="no-referrer"
-                    crossOrigin="anonymous"
                     style={{
                       width: "100%",
                       height: 180,
                       objectFit: "cover",
                       display: "block"
                     }}
+                    loading="lazy"
+                    decoding="async"
                   />
                 ) : (
                   <div style={{ height: 180, background: "rgba(255,255,255,0.04)" }} />
@@ -107,7 +113,8 @@ export default async function LobbyPage() {
                   style={{
                     position: "absolute",
                     inset: 0,
-                    background: "linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.75) 100%)"
+                    background:
+                      "linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.78) 100%)"
                   }}
                 />
               </div>
