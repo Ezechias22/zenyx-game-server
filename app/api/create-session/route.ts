@@ -6,10 +6,7 @@ export const dynamic = "force-dynamic"
 export async function GET(req: NextRequest) {
   const gameCode = req.nextUrl.searchParams.get("gameCode")
   if (!gameCode) {
-    return new NextResponse(null, {
-      status: 302,
-      headers: { Location: "/" }
-    })
+    return new NextResponse(null, { status: 302, headers: { Location: "/" } })
   }
 
   const res = await fetch(`${process.env.PROVIDER_BASE_URL}/v1/public/session`, {
@@ -28,25 +25,25 @@ export async function GET(req: NextRequest) {
   })
 
   if (!res.ok) {
-    return new NextResponse(null, {
-      status: 302,
-      headers: { Location: "/" }
-    })
+    return new NextResponse(null, { status: 302, headers: { Location: "/" } })
   }
 
   const data = await res.json().catch(() => null)
   const sessionId: string | undefined = data?.sessionId
+  const launchUrl: string | undefined = data?.launchUrl
 
   if (!sessionId) {
-    return new NextResponse(null, {
-      status: 302,
-      headers: { Location: "/" }
-    })
+    return new NextResponse(null, { status: 302, headers: { Location: "/" } })
   }
 
-  // ✅ Redirect RELATIF => jamais 0.0.0.0
+  const qs = new URLSearchParams({
+    sessionId
+  })
+
+  if (launchUrl) qs.set("launchUrl", launchUrl)
+
   return new NextResponse(null, {
     status: 302,
-    headers: { Location: `/play?sessionId=${encodeURIComponent(sessionId)}` }
+    headers: { Location: `/play?${qs.toString()}` }
   })
 }
