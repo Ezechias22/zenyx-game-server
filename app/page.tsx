@@ -1,3 +1,5 @@
+import { fetchGames } from "@/lib/provider"
+
 type Game = {
   id: string
   name: string
@@ -9,9 +11,7 @@ type Game = {
 export const dynamic = "force-dynamic"
 
 function normalizeBaseUrl(u: string) {
-  // retire trailing slash
   let base = (u || "").replace(/\/+$/, "")
-  // retire /v1 si jamais tu l’as mis par erreur
   base = base.replace(/\/v1$/, "")
   return base
 }
@@ -26,8 +26,8 @@ function toAbsoluteUrl(base: string, path?: string) {
 export default async function Home() {
   const providerBaseUrl = normalizeBaseUrl(process.env.PROVIDER_BASE_URL || "")
 
-  const res = await fetch("/api/games", { cache: "no-store" })
-  const games: Game[] = await res.json()
+  const data: any = await fetchGames()
+  const games: Game[] = Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
 
   return (
     <main style={{ padding: 40, maxWidth: 1200, margin: "0 auto" }}>
@@ -53,7 +53,6 @@ export default async function Home() {
                 boxShadow: "0 10px 30px rgba(0,0,0,0.4)"
               }}
             >
-              {/* Cover */}
               {coverUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -72,7 +71,7 @@ export default async function Home() {
                 <h3 style={{ margin: "0 0 8px 0" }}>{game.name}</h3>
                 <div style={{ fontSize: 13, opacity: 0.7 }}>
                   <div>Type: {game.kind}</div>
-                  <div>RTP: {game.rtp}</div>
+                  <div>RTP: {String(game.rtp)}</div>
                 </div>
 
                 <a
