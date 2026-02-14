@@ -9,7 +9,8 @@ export async function GET(req: NextRequest) {
     return new NextResponse(null, { status: 302, headers: { Location: "/" } })
   }
 
-  const res = await fetch(`${process.env.PROVIDER_BASE_URL}/v1/public/session`, {
+  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
+  const res = await fetch(`${base}/v1/public/session`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -30,17 +31,30 @@ export async function GET(req: NextRequest) {
 
   const data = await res.json().catch(() => null)
   const sessionId: string | undefined = data?.sessionId
-  const launchUrl: string | undefined = data?.launchUrl
+  const providerLaunchUrl: string | undefined = data?.launchUrl
 
   if (!sessionId) {
     return new NextResponse(null, { status: 302, headers: { Location: "/" } })
   }
 
-  const qs = new URLSearchParams({
-    sessionId
-  })
+  // ✅ Ne jamais iframer ton propre /play (ça crée une boucle).
+  // On ne transmet launchUrl que si c'est une URL externe (provider web UI).
+  let externalLaunchUrl = ""
+  if (typeof providerLaunchUrl === "string") {
+    try {
+      const u = new URL(providerLaunchUrl)
+      const currentHost = req.headers.get("host") || ""
+      if (u.host && u.host !== currentHost) externalLaunchUrl = providerLaunchUrl
+    } catch {
+      // ignore
+    }
+  }
 
-  if (launchUrl) qs.set("launchUrl", launchUrl)
+  const qs = new URLSearchParams({
+    sessionId,
+    gameCode
+  })
+  if (externalLaunchUrl) qs.set("launchUrl", externalLaunchUrl)
 
   return new NextResponse(null, {
     status: 302,
