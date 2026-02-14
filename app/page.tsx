@@ -1,5 +1,3 @@
-import Link from "next/link"
-
 export const dynamic = "force-dynamic"
 
 type Game = {
@@ -55,7 +53,7 @@ export default async function Lobby() {
         }}
       >
         {games.map((game) => (
-          <Link
+          <a
             key={game.id}
             href={`/api/create-session?gameCode=${game.id}`}
             style={{
@@ -64,7 +62,7 @@ export default async function Lobby() {
               background: "#111827",
               borderRadius: "12px",
               overflow: "hidden",
-              transition: "transform 0.2s ease"
+              display: "block"
             }}
           >
             <img
@@ -85,7 +83,7 @@ export default async function Lobby() {
                 {game.kind} — RTP {(game.rtp * 100).toFixed(2)}%
               </div>
             </div>
-          </Link>
+          </a>
         ))}
       </div>
     </main>
