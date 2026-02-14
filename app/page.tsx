@@ -13,20 +13,17 @@ type Game = {
 }
 
 async function getGames(): Promise<Game[]> {
-  const res = await fetch(
-    `${process.env.PROVIDER_BASE_URL}/v1/public/games`,
-    {
-      headers: {
-        "x-public-token": process.env.PUBLIC_TOKEN!,
-        "x-operator-key": process.env.OPERATOR_KEY!
-      },
-      cache: "no-store"
-    }
-  )
+  const res = await fetch(`${process.env.PROVIDER_BASE_URL}/v1/public/games`, {
+    headers: {
+      "x-public-token": process.env.PUBLIC_TOKEN!,
+      "x-operator-key": process.env.OPERATOR_KEY!
+    },
+    cache: "no-store"
+  })
 
   if (!res.ok) return []
-
-  return res.json()
+  const data = await res.json()
+  return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
 }
 
 export default async function Lobby() {
@@ -41,46 +38,48 @@ export default async function Lobby() {
         color: "#fff"
       }}
     >
-      <h1 style={{ fontSize: "32px", marginBottom: "30px" }}>
-        🎰 ZENYX GAMES
+      <h1 style={{ fontSize: 32, fontWeight: 900, marginBottom: 24 }}>
+        🎰 ZENYX CASINO
       </h1>
 
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
-          gap: "20px"
+          gap: 18
         }}
       >
         {games.map((game) => (
           <a
             key={game.id}
-            href={`/api/create-session?gameCode=${game.id}`}
+            href={`/api/create-session?gameCode=${encodeURIComponent(game.id)}`}
             style={{
+              display: "block",
               textDecoration: "none",
               color: "white",
-              background: "#111827",
-              borderRadius: "12px",
+              borderRadius: 14,
               overflow: "hidden",
-              display: "block"
+              background: "#111827",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.35)"
             }}
           >
             <img
-              src={`/api/assets?path=${encodeURIComponent(
-                game.assets.cover
-              )}`}
+              src={`/api/assets?path=${encodeURIComponent(game.assets?.cover || "")}`}
               alt={game.name}
               style={{
                 width: "100%",
-                height: "200px",
-                objectFit: "cover"
+                height: 180,
+                objectFit: "cover",
+                display: "block"
               }}
             />
 
-            <div style={{ padding: "15px" }}>
-              <div style={{ fontWeight: 700 }}>{game.name}</div>
-              <div style={{ opacity: 0.6, fontSize: "14px" }}>
-                {game.kind} — RTP {(game.rtp * 100).toFixed(2)}%
+            <div style={{ padding: 14 }}>
+              <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>
+                {game.name}
+              </div>
+              <div style={{ opacity: 0.75, fontSize: 13 }}>
+                {game.kind} • RTP {Math.round((Number(game.rtp) || 0) * 100)}%
               </div>
             </div>
           </a>

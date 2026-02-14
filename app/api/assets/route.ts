@@ -1,29 +1,30 @@
 import { NextRequest } from "next/server"
 
+export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 export async function GET(req: NextRequest) {
-  const path = req.nextUrl.searchParams.get("path")
+  const path = req.nextUrl.searchParams.get("path") || ""
 
-  if (!path) {
-    return new Response("Missing path", { status: 400 })
+  if (!path.startsWith("/assets/")) {
+    return new Response("Invalid path", { status: 400 })
   }
 
-  const providerBase = process.env.PROVIDER_BASE_URL!
+  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
+  const upstreamUrl = `${base}${path}`
 
-  const fullUrl = `${providerBase}${path}`
-
-  const res = await fetch(fullUrl)
-
-  if (!res.ok) {
-    return new Response("Asset error", { status: 500 })
+  const upstream = await fetch(upstreamUrl, { cache: "no-store" })
+  if (!upstream.ok) {
+    return new Response("Asset error", { status: upstream.status })
   }
 
-  const buffer = await res.arrayBuffer()
+  const contentType = upstream.headers.get("content-type") || "application/octet-stream"
+  const buf = await upstream.arrayBuffer()
 
-  return new Response(buffer, {
+  return new Response(buf, {
+    status: 200,
     headers: {
-      "Content-Type": res.headers.get("content-type") || "image/png",
+      "Content-Type": contentType,
       "Cache-Control": "public, max-age=86400"
     }
   })
