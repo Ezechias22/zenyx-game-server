@@ -197,17 +197,27 @@ export default function PlayClient({
                   </div>
 
                   {symbols.length > 0 && (
-                    <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-                      {symbols.slice(0, 8).map((p) => (
-                        <img
-                          key={p}
-                          src={`/api/assets?path=${encodeURIComponent(p)}`}
-                          alt="symbol"
-                          style={{ width: 44, height: 44, objectFit: "contain", opacity: 0.92 }}
-                        />
-                      ))}
-                    </div>
-                  )}
+                <div
+                    style={{
+                    marginTop: 14,
+                    display: "flex",
+                    gap: 10,
+                    justifyContent: "center",
+                    flexWrap: "wrap"
+                    }}
+                >
+                    {symbols.map((p) => (
+                    <img
+                        key={p}
+                        src={`/api/assets?path=${encodeURIComponent(p)}`}
+                        alt="symbol"
+                        style={{ width: 44, height: 44, objectFit: "contain", opacity: 0.92 }}
+                        loading="lazy"
+                        decoding="async"
+                    />
+                    ))}
+                </div>
+                )}
                 </div>
               </div>
             )}

@@ -11,7 +11,11 @@ type Game = {
   assets?: {
     cover?: string
     background?: string
-    symbols?: string[]
+    // provider may send symbols as:
+    // - string[] (list of paths)
+    // - Record<string,string> (map)
+    // - { list: string[] } (wrapped)
+    symbols?: unknown
   }
 }
 
@@ -29,6 +33,31 @@ async function getGames(): Promise<Game[]> {
   return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
 }
 
+function normalizeSymbols(input: unknown): string[] {
+  if (!input) return []
+
+  // string[]
+  if (Array.isArray(input)) {
+    return input.filter((x) => typeof x === "string") as string[]
+  }
+
+  // { list: string[] } or { symbols: string[] }
+  if (typeof input === "object" && input !== null) {
+    const anyObj = input as Record<string, unknown>
+
+    const maybeList = anyObj.list || anyObj.symbols
+    if (Array.isArray(maybeList)) {
+      return maybeList.filter((x) => typeof x === "string") as string[]
+    }
+
+    // map { wild: "/assets/.../wild.png", ... }
+    const values = Object.values(anyObj).filter((v) => typeof v === "string") as string[]
+    if (values.length) return values
+  }
+
+  return []
+}
+
 export default async function PlayPage({
   searchParams
 }: {
@@ -42,13 +71,13 @@ export default async function PlayPage({
 
   const games = await getGames()
   const game = games.find((g) => g.id === gameCode)
-
   if (!game) redirect("/")
 
   const bgPath = game.assets?.background || ""
   const bgUrl = bgPath ? `/api/assets?path=${encodeURIComponent(bgPath)}` : ""
 
   const launchUrl = searchParams.launchUrl || ""
+  const symbols = normalizeSymbols(game.assets?.symbols)
 
   return (
     <PlayClient
@@ -57,7 +86,7 @@ export default async function PlayPage({
       kind={game.kind}
       backgroundUrl={bgUrl}
       launchUrl={launchUrl}
-      symbols={Array.isArray(game.assets?.symbols) ? game.assets!.symbols! : []}
+      symbols={symbols}
     />
   )
 }
