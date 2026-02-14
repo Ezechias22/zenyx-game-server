@@ -1,18 +1,13 @@
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-import { getEnvSafe } from "@/lib/runtime-env"
+import { fetchGames } from "@/lib/provider"
 
 export async function GET() {
-  const { PROVIDER_BASE_URL, missing } = getEnvSafe()
-  if (missing.length) {
-    return Response.json({ error: "Missing env", missing }, { status: 500 })
+  const data = await fetchGames()
+  // Si provider renvoie une erreur, on la forward proprement
+  if (data?.error) {
+    return Response.json(data.body ?? { error: "Provider error" }, { status: data.status || 502 })
   }
-
-  const res = await fetch(`${PROVIDER_BASE_URL}/v1/public/games`, {
-    cache: "no-store"
-  })
-
-  const data = await res.json().catch(() => null)
-  return Response.json(data ?? { error: "Invalid provider response" }, { status: res.status })
+  return Response.json(data)
 }
