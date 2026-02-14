@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "prisma generate && next build",
-    "start": "PORT=${PORT:-3000} node .next/standalone/server.js",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy"
-  },
+  "dev": "next dev -p 3000",
+  "build": "prisma generate && next build",
+  "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
+  "prisma:generate": "prisma generate",
+  "prisma:migrate": "prisma migrate deploy"
+},
   "dependencies": {
     "@prisma/client": "^5.15.0",
     "bcryptjs": "^2.4.3",
