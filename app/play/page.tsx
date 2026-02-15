@@ -1,23 +1,11 @@
-// app/play/page.tsx
-import { redirect } from "next/navigation"
-import PlayClient from "./play-client"
-
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
+import PlayClient from "./play-client";
 
 export default function PlayPage({
-  searchParams
+  searchParams,
 }: {
-  searchParams: { sessionId?: string; gameCode?: string }
+  searchParams?: { sessionId?: string; gameCode?: string };
 }) {
-  const sessionId =
-    typeof searchParams.sessionId === "string" && searchParams.sessionId.length >= 10
-      ? searchParams.sessionId
-      : ""
-
-  if (!sessionId) redirect("/")
-
-  const gameCode = typeof searchParams.gameCode === "string" ? searchParams.gameCode : ""
-
-  return <PlayClient sessionId={sessionId} initialGameCode={gameCode} />
+  const sessionId = searchParams?.sessionId ?? "";
+  const gameCode = searchParams?.gameCode ?? "";
+  return <PlayClient sessionId={sessionId} gameCode={gameCode} />;
 }
