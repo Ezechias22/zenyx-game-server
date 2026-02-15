@@ -1,72 +1,98 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import "./play-client.css"
 
 type Game = {
-  id: string
-  name: string
-  kind: "SLOT" | "CRASH" | "DICE" | string
-  rtp?: number
-  volatility?: string
-  ui?: { aspectRatio?: string; width?: number; height?: number }
+  id?: string
+  name?: string
+  kind?: string
   assets?: {
     cover?: string
     background?: string
-    symbols?: string[] // array de paths "/assets/..."
+    symbols?: string[]
+  }
+  ui?: {
+    aspectRatio?: string
+    width?: number
+    height?: number
   }
 }
 
-type ProviderPlayResponse = {
+type PlayResult = {
   sessionId?: string
   gameCode?: string
-  kind?: string
   bet?: number
   win?: number
-  balance?: number
+  balance?: number | { balance?: number }
   currency?: string
-  nonce?: number
   result?: {
-    symbols?: string[] // IMPORTANT: 15 symbols = 5x3, ordre provider
-    [k: string]: unknown
+    symbols?: string[] | string[][]
+    paylines?: unknown
   }
+  provider?: unknown
   [k: string]: unknown
 }
 
-const REELS = 5
-const ROWS = 3
-const TOTAL = REELS * ROWS
-
-function safeStr(v: unknown) {
-  return typeof v === "string" ? v : ""
-}
-function safeNum(v: unknown, fallback = 0) {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : fallback
+function clampNumber(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
 }
 
-function flattenToGrid(symbols15: string[]) {
-  // Provider doit renvoyer 15 symbols (5x3).
-  // On accepte aussi autre taille -> on remplit.
-  const out = Array.from({ length: REELS }, () => Array.from({ length: ROWS }, () => ""))
-  for (let i = 0; i < TOTAL; i++) {
-    const s = symbols15[i] || ""
-    const reel = i % REELS
-    const row = Math.floor(i / REELS)
-    if (row < ROWS) out[reel][row] = s
+function normalizeSymbolsToGrid(
+  symbols: string[] | string[][] | undefined,
+  fallbackPool: string[],
+  cols = 5,
+  rows = 3
+): string[][] {
+  // If provider returns 2D already:
+  if (Array.isArray(symbols) && Array.isArray(symbols[0])) {
+    const s2d = symbols as string[][]
+    // Normalize to cols x rows
+    const grid: string[][] = Array.from({ length: cols }, () => Array(rows).fill(""))
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        grid[c][r] = s2d?.[c]?.[r] || fallbackPool[(c * rows + r) % Math.max(1, fallbackPool.length)] || ""
+      }
+    }
+    return grid
   }
-  return out
+
+  // If provider returns flat array:
+  const flat = (symbols as string[] | undefined) ?? []
+  const grid: string[][] = Array.from({ length: cols }, () => Array(rows).fill(""))
+  const total = cols * rows
+
+  for (let i = 0; i < total; i++) {
+    const c = i % cols
+    const r = Math.floor(i / cols)
+    grid[c][r] =
+      flat[i] ||
+      fallbackPool[i % Math.max(1, fallbackPool.length)] ||
+      ""
+  }
+  return grid
 }
 
-function randomGridFromPool(pool: string[]) {
-  const p = pool.length ? pool : [""]
-  const pick = () => p[Math.floor(Math.random() * p.length)] || ""
-  const out = Array.from({ length: REELS }, () => Array.from({ length: ROWS }, () => pick()))
-  return out
+function randomGridFromPool(pool: string[], cols = 5, rows = 3): string[][] {
+  const safePool = pool?.length ? pool : []
+  const pick = () =>
+    safePool.length
+      ? safePool[Math.floor(Math.random() * safePool.length)]
+      : ""
+
+  return Array.from({ length: cols }, () =>
+    Array.from({ length: rows }, () => pick())
+  )
 }
 
-function toAssetProxy(path: string) {
-  // path = "/assets/xxx.png" → proxy même origin (évite NotSameOrigin)
-  return `/api/assets?path=${encodeURIComponent(path)}`
+function resolveAssetUrl(pathOrUrl: string | undefined) {
+  if (!pathOrUrl) return ""
+  // If already absolute:
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl
+
+  // Best effort: serve via /api/assets to avoid CORS issues
+  // (Your /api/assets proxies provider assets.)
+  return `/api/assets?path=${encodeURIComponent(pathOrUrl)}`
 }
 
 export default function PlayClient({
@@ -76,207 +102,219 @@ export default function PlayClient({
   sessionId: string
   initialGameCode: string
 }) {
-  const [games, setGames] = useState<Game[]>([])
+  const [loading, setLoading] = useState(true)
+  const [spinning, setSpinning] = useState(false)
+
+  const [game, setGame] = useState<Game | null>(null)
   const [gameCode, setGameCode] = useState<string>(initialGameCode || "")
-  const [grid, setGrid] = useState<string[][]>(() => randomGridFromPool([]))
 
   const [bet, setBet] = useState<number>(1)
   const [win, setWin] = useState<number>(0)
   const [balance, setBalance] = useState<number>(0)
   const [currency, setCurrency] = useState<string>("BRL")
 
-  const [spinning, setSpinning] = useState<boolean>(false)
-  const [flashWin, setFlashWin] = useState<boolean>(false)
+  const [grid, setGrid] = useState<string[][]>(() => Array.from({ length: 5 }, () => Array(3).fill("")))
 
-  const spinTimer = useRef<number | null>(null)
-  const flashTimer = useRef<number | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (spinTimer.current) window.clearInterval(spinTimer.current)
-      if (flashTimer.current) window.clearTimeout(flashTimer.current)
-    }
-  }, [])
-
-  // 1) Load catalog (game list)
-  useEffect(() => {
-    let dead = false
-    fetch("/api/games", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((data) => {
-        if (dead) return
-        const list: Game[] = Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
-        setGames(list)
-
-        // Si pas de gameCode dans l'URL, on peut essayer de deviner plus tard (après /api/play),
-        // mais pour l'UI initiale on reste safe.
-      })
-      .catch(() => {
-        if (dead) return
-        setGames([])
-      })
-    return () => {
-      dead = true
-    }
-  }, [])
-
-  const game: Game | undefined = useMemo(() => {
-    if (!gameCode) return undefined
-    return games.find((g) => g.id === gameCode)
-  }, [games, gameCode])
-
-  const symbolPool: string[] = useMemo(() => {
-    const s = game?.assets?.symbols
-    return Array.isArray(s) ? s.filter((x) => typeof x === "string" && x.length > 0) : []
+  const symbolPool = useMemo(() => {
+    const arr = game?.assets?.symbols
+    return Array.isArray(arr) ? arr.filter(Boolean) : []
   }, [game])
 
-  // 2) Ensure initial grid shows symbols immediately when catalog loaded
-  useEffect(() => {
-    if (!symbolPool.length) return
-    setGrid(randomGridFromPool(symbolPool))
-    // Preload symbols (best-effort)
-    symbolPool.slice(0, 40).forEach((p) => {
-      const img = new Image()
-      img.src = toAssetProxy(p)
-    })
-  }, [symbolPool])
+  const bgUrl = useMemo(() => resolveAssetUrl(game?.assets?.background), [game])
 
-  const backgroundUrl = useMemo(() => {
-    const p = game?.assets?.background
-    return p ? toAssetProxy(p) : ""
-  }, [game])
+  // Prevent double spins
+  const spinLock = useRef(false)
+
+  useEffect(() => {
+    // If sessionId missing -> go lobby
+    if (!sessionId) {
+      window.location.href = "/"
+      return
+    }
+
+    let alive = true
+    ;(async () => {
+      try {
+        setLoading(true)
+
+        // 1) Fetch catalog
+        const res = await fetch("/api/games", { cache: "no-store" })
+        if (!res.ok) throw new Error("Failed to load games")
+        const games = (await res.json()) as Game[]
+
+        // 2) Determine gameCode if not provided
+        // If not provided, we can keep unknown and still play (provider returns gameCode on play).
+        const found =
+          (gameCode && games.find(g => (g.id || "").toString() === gameCode)) ||
+          null
+
+        if (!alive) return
+        setGame(found)
+        if (found?.id) setGameCode(found.id)
+
+        // 3) Build initial grid from assets.symbols
+        const pool = Array.isArray(found?.assets?.symbols) ? found!.assets!.symbols!.filter(Boolean) : []
+        const initial = randomGridFromPool(pool, 5, 3)
+        setGrid(initial)
+
+        // 4) Preload symbols (fast)
+        pool.slice(0, 50).forEach(p => {
+          const img = new Image()
+          img.src = resolveAssetUrl(p)
+        })
+      } catch {
+        // If catalog fails, still render with empty background & grid.
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   async function doSpin() {
-    if (spinning) return
-    setSpinning(true)
-    setFlashWin(false)
+    if (!sessionId) return
+    if (spinLock.current) return
 
-    // Anim "shuffle" pendant le call API
-    if (spinTimer.current) window.clearInterval(spinTimer.current)
-    if (symbolPool.length) {
-      spinTimer.current = window.setInterval(() => {
-        setGrid(randomGridFromPool(symbolPool))
-      }, 70)
-    }
-
-    let payload: ProviderPlayResponse = {}
     try {
+      spinLock.current = true
+      setSpinning(true)
+      setWin(0)
+
+      // quick fake spin animation by shuffling grid first
+      if (symbolPool.length) {
+        setGrid(randomGridFromPool(symbolPool, 5, 3))
+      }
+
       const res = await fetch("/api/play", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, bet })
+        body: JSON.stringify({
+          sessionId,
+          bet: bet
+        })
       })
-      payload = await res.json().catch(() => ({}))
-    } catch {
-      payload = {}
-    }
 
-    // Stop animation et settle
-    const settleMs = 900
-    window.setTimeout(() => {
-      if (spinTimer.current) window.clearInterval(spinTimer.current)
-      spinTimer.current = null
-      setSpinning(false)
-    }, settleMs)
+      const data = (await res.json()) as PlayResult
 
-    // Update stats (NE PAS rendre d'objet brut)
-    const nextWin = safeNum(payload?.win, 0)
-    const nextBalance = safeNum(payload?.balance, balance)
-    const nextCurrency = safeStr(payload?.currency) || currency
+      if (!res.ok) {
+        // Keep UI alive; stop spinning
+        setSpinning(false)
+        return
+      }
 
-    setWin(nextWin)
-    setBalance(nextBalance)
-    setCurrency(nextCurrency)
+      const nextGameCode = typeof data.gameCode === "string" ? data.gameCode : gameCode
+      if (nextGameCode && !game?.id) {
+        // If game not set (missing gameCode initially), fetch catalog again and set game
+        try {
+          const gRes = await fetch("/api/games", { cache: "no-store" })
+          if (gRes.ok) {
+            const games = (await gRes.json()) as Game[]
+            const found = games.find(g => (g.id || "") === nextGameCode) || null
+            setGame(found)
+            setGameCode(nextGameCode)
+          }
+        } catch {}
+      }
 
-    // Update gameCode if provider returns it (important si /play n'a pas gameCode)
-    const gc = safeStr(payload?.gameCode)
-    if (gc && gc !== gameCode) setGameCode(gc)
+      const nextWin = typeof data.win === "number" ? data.win : 0
+      const nextCurrency =
+        typeof data.currency === "string" ? data.currency : currency
 
-    // 3) Replace grid by provider result.symbols if provided
-    const resultSymbols = payload?.result?.symbols
-    if (Array.isArray(resultSymbols) && resultSymbols.length) {
-      const clean = resultSymbols.filter((x) => typeof x === "string" && x.length > 0)
-      // settle slightly after animation
-      window.setTimeout(() => {
-        setGrid(flattenToGrid(clean))
-      }, settleMs - 120)
-    } else {
-      // fallback: at least show a stable grid
-      window.setTimeout(() => {
-        if (symbolPool.length) setGrid(randomGridFromPool(symbolPool))
-      }, settleMs - 120)
-    }
+      let nextBalance = 0
+      if (typeof data.balance === "number") nextBalance = data.balance
+      else if (data.balance && typeof data.balance === "object") {
+        const b = (data.balance as { balance?: number }).balance
+        nextBalance = typeof b === "number" ? b : balance
+      } else {
+        nextBalance = balance
+      }
 
-    if (nextWin > 0) {
-      window.setTimeout(() => {
-        setFlashWin(true)
-        if (flashTimer.current) window.clearTimeout(flashTimer.current)
-        flashTimer.current = window.setTimeout(() => setFlashWin(false), 900)
-      }, settleMs + 40)
+      // Prefer provider result symbols; fallback to assets.symbols
+      const resultSymbols = data?.result?.symbols
+      const pool = symbolPool.length ? symbolPool : []
+      const nextGrid = normalizeSymbolsToGrid(resultSymbols, pool, 5, 3)
+
+      // Delay slightly so animation feels real
+      setTimeout(() => {
+        setGrid(nextGrid)
+        setWin(nextWin)
+        setBalance(nextBalance)
+        setCurrency(nextCurrency)
+        setSpinning(false)
+      }, 350)
+    } finally {
+      setTimeout(() => {
+        spinLock.current = false
+      }, 350)
     }
   }
 
+  function setBetQuick(v: number) {
+    setBet(clampNumber(v, 1, 1000))
+  }
+
+  const title = game?.name ? `ZENYX • ${game.name}` : "ZENYX • PLAY"
+
   return (
-    <main style={page(backgroundUrl)}>
-      {/* Header compact (pas de panels en haut) */}
-      <header style={headerBar}>
-        <div style={{ display: "grid", gap: 2 }}>
-          <div style={{ fontWeight: 950, letterSpacing: 0.2 }}>
-            {game?.name ? `ZENYX • ${game.name}` : "ZENYX • PLAY"}
-          </div>
-          <div style={{ opacity: 0.75, fontSize: 12 }}>
-            Session:{" "}
-            <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{sessionId}</span>
+    <div className="playRoot">
+      <div
+        className="bg"
+        style={{
+          backgroundImage: bgUrl ? `url("${bgUrl}")` : undefined
+        }}
+      />
+      <div className="overlay" />
+
+      <header className="topBar">
+        <div className="left">
+          <div className="brand">{title}</div>
+          <div className="sub">
+            Session: <span className="mono">{sessionId}</span>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <a href="/" style={btnGhost}>
+        <div className="right">
+          <button
+            className="ghostBtn"
+            onClick={() => (window.location.href = "/")}
+            type="button"
+          >
             ← Lobby
-          </a>
-          <button onClick={doSpin} disabled={spinning} style={btnPrimary}>
-            {spinning ? "SPIN..." : "SPIN"}
+          </button>
+          <button
+            className="spinBtnSmall"
+            onClick={doSpin}
+            disabled={spinning || loading}
+            type="button"
+          >
+            {spinning ? "..." : "SPIN"}
           </button>
         </div>
       </header>
 
-      {/* Stage */}
-      <section style={stageWrap}>
-        <div style={stageInner}>
-          {/* Overlay flash win */}
-          <div
-            style={{
-              pointerEvents: "none",
-              position: "absolute",
-              inset: 0,
-              opacity: flashWin ? 1 : 0,
-              transition: "opacity .15s ease",
-              background: "radial-gradient(circle at 50% 45%, rgba(124,58,237,0.55), transparent 60%)",
-              mixBlendMode: "screen"
-            }}
-          />
-
-          {/* Responsive grid reels */}
-          <div style={reelsGrid}>
-            {Array.from({ length: REELS }).map((_, reelIdx) => (
-              <div key={reelIdx} style={reelCol(spinning, reelIdx)}>
-                {Array.from({ length: ROWS }).map((__, rowIdx) => {
-                  const sym = grid[reelIdx]?.[rowIdx] || ""
-                  const src = sym ? toAssetProxy(sym) : ""
-                  const highlight = flashWin && rowIdx === 1
+      <main className="stage">
+        <div className="reelFrame">
+          <div className={`reels ${spinning ? "spinning" : ""}`}>
+            {Array.from({ length: 5 }).map((_, col) => (
+              <div className="reelCol" key={col}>
+                {Array.from({ length: 3 }).map((__, row) => {
+                  const path = grid?.[col]?.[row] || ""
+                  const src = resolveAssetUrl(path)
                   return (
-                    <div key={rowIdx} style={cell(highlight)}>
+                    <div className="cell" key={`${col}-${row}`}>
                       {src ? (
                         <img
+                          className="sym"
                           src={src}
                           alt="symbol"
-                          loading="lazy"
-                          decoding="async"
-                          style={symbolImg}
                           draggable={false}
                         />
                       ) : (
-                        <div style={{ opacity: 0.35, fontSize: 12 }}> </div>
+                        <div className="symPlaceholder" />
                       )}
                     </div>
                   )
@@ -285,211 +323,55 @@ export default function PlayClient({
             ))}
           </div>
 
-          <div style={glass} />
+          <div className={`winGlow ${win > 0 ? "on" : ""}`} />
         </div>
-      </section>
+      </main>
 
-      {/* Sticky Footer (BET / WIN / BALANCE + SPIN) */}
-      <footer style={footerSticky}>
-        <div style={footerCards}>
-          <div style={miniCard}>
-            <div style={miniLabel}>BET</div>
-            <div style={miniValue}>{bet}</div>
-            <div style={betRow}>
-              {[1, 2, 5, 10].map((x) => (
-                <button key={x} onClick={() => setBet(x)} style={pill(bet === x)}>
-                  {x}
-                </button>
-              ))}
-            </div>
+      <footer className="footer">
+        <div className="panel">
+          <div className="label">BET</div>
+          <div className="value">{bet}</div>
+          <div className="chips">
+            {[1, 2, 5, 10].map(v => (
+              <button
+                key={v}
+                className={`chip ${bet === v ? "active" : ""}`}
+                onClick={() => setBetQuick(v)}
+                type="button"
+              >
+                {v}
+              </button>
+            ))}
           </div>
-
-          <div style={miniCard}>
-            <div style={miniLabel}>WIN</div>
-            <div style={miniValue}>{win}</div>
-          </div>
-
-          <div style={miniCard}>
-            <div style={miniLabel}>BALANCE</div>
-            <div style={miniValue}>
-              {balance} <span style={{ opacity: 0.75, fontSize: 14 }}>{currency}</span>
-            </div>
+          <div className="betRow">
+            <button className="mini" onClick={() => setBetQuick(bet - 1)} type="button">−</button>
+            <button className="mini" onClick={() => setBetQuick(bet + 1)} type="button">+</button>
           </div>
         </div>
 
-        <button onClick={doSpin} disabled={spinning} style={footerSpin}>
-          {spinning ? "SPIN..." : "SPIN"}
+        <div className="panel">
+          <div className="label">WIN</div>
+          <div className={`value ${win > 0 ? "win" : ""}`}>{win}</div>
+        </div>
+
+        <div className="panel">
+          <div className="label">BALANCE</div>
+          <div className="value">
+            {balance} <span className="cur">{currency}</span>
+          </div>
+        </div>
+
+        <button
+          className={`spinBtn ${spinning ? "busy" : ""}`}
+          onClick={doSpin}
+          disabled={spinning || loading}
+          type="button"
+          aria-label="Spin"
+        >
+          <div className="spinRing" />
+          <div className="spinText">{spinning ? "..." : "SPIN"}</div>
         </button>
       </footer>
-
-      {/* spacer pour éviter que le footer cache la grille */}
-      <div style={{ height: 140 }} />
-    </main>
+    </div>
   )
-}
-
-/* ---------------- styles (inline, production-safe) ---------------- */
-
-const page = (backgroundUrl: string): React.CSSProperties => ({
-  minHeight: "100vh",
-  color: "#fff",
-  background: backgroundUrl
-    ? `linear-gradient(rgba(0,0,0,0.76), rgba(0,0,0,0.9)), url(${backgroundUrl}) center/cover no-repeat`
-    : "#060913",
-  padding: 16,
-  display: "grid",
-  gap: 12
-})
-
-const headerBar: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap"
-}
-
-const btnGhost: React.CSSProperties = {
-  textDecoration: "none",
-  color: "#fff",
-  opacity: 0.92,
-  padding: "10px 12px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  fontWeight: 900,
-  fontSize: 13
-}
-
-const btnPrimary: React.CSSProperties = {
-  padding: "10px 16px",
-  borderRadius: 12,
-  background: "#7c3aed",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 13,
-  cursor: "pointer"
-}
-
-const stageWrap: React.CSSProperties = {
-  width: "100%",
-  display: "grid",
-  placeItems: "center"
-}
-
-const stageInner: React.CSSProperties = {
-  position: "relative",
-  width: "100%",
-  maxWidth: 980,
-  borderRadius: 18,
-  overflow: "hidden",
-  border: "1px solid rgba(255,255,255,0.10)",
-  background: "rgba(10,14,24,0.68)"
-}
-
-const reelsGrid: React.CSSProperties = {
-  width: "100%",
-  padding: 14,
-  display: "grid",
-  gap: 10,
-  // Responsive: mobile 3-4 colonnes auto, desktop 5 colonnes
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(160px, 30vw), 1fr))",
-  alignItems: "stretch"
-}
-
-const reelCol = (spinning: boolean, idx: number): React.CSSProperties => ({
-  background: "rgba(17,24,39,0.62)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  borderRadius: 14,
-  overflow: "hidden",
-  display: "grid",
-  gridTemplateRows: "repeat(3, 1fr)",
-  minHeight: "clamp(240px, 42vw, 420px)",
-  transform: spinning ? `translateY(${(idx % 2 === 0 ? -1 : 1) * 8}px)` : "translateY(0px)",
-  transition: "transform .18s ease"
-})
-
-const cell = (highlight: boolean): React.CSSProperties => ({
-  display: "grid",
-  placeItems: "center",
-  background: highlight ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.03)",
-  borderBottom: "1px solid rgba(255,255,255,0.06)"
-})
-
-const symbolImg: React.CSSProperties = {
-  width: "clamp(56px, 12vw, 92px)",
-  height: "clamp(56px, 12vw, 92px)",
-  objectFit: "contain",
-  filter: "drop-shadow(0 6px 18px rgba(0,0,0,0.45))"
-}
-
-const glass: React.CSSProperties = {
-  pointerEvents: "none",
-  position: "absolute",
-  inset: 0,
-  background:
-    "linear-gradient(135deg, rgba(255,255,255,0.07) 0%, transparent 35%, transparent 70%, rgba(255,255,255,0.05) 100%)",
-  opacity: 0.6
-}
-
-const footerSticky: React.CSSProperties = {
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  padding: 12,
-  background: "linear-gradient(to top, rgba(0,0,0,0.88), rgba(0,0,0,0.55))",
-  backdropFilter: "blur(10px)",
-  borderTop: "1px solid rgba(255,255,255,0.10)",
-  zIndex: 50,
-  display: "grid",
-  gap: 10
-}
-
-const footerCards: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 980,
-  margin: "0 auto",
-  display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  gap: 10
-}
-
-const miniCard: React.CSSProperties = {
-  background: "rgba(17,24,39,0.72)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  borderRadius: 14,
-  padding: 12,
-  minHeight: 78
-}
-
-const miniLabel: React.CSSProperties = { opacity: 0.7, fontSize: 12, fontWeight: 950 }
-const miniValue: React.CSSProperties = { marginTop: 6, fontSize: 18, fontWeight: 950 }
-
-const betRow: React.CSSProperties = { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }
-
-const pill = (active: boolean): React.CSSProperties => ({
-  padding: "7px 10px",
-  borderRadius: 999,
-  background: active ? "#7c3aed" : "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 12,
-  cursor: "pointer"
-})
-
-const footerSpin: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 980,
-  margin: "0 auto",
-  padding: "14px 16px",
-  borderRadius: 14,
-  background: "#7c3aed",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 14,
-  cursor: "pointer"
 }
