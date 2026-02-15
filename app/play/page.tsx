@@ -7,5 +7,5 @@ export default function PlayPage({
 }) {
   const sessionId = searchParams?.sessionId ?? "";
   const gameCode = searchParams?.gameCode ?? "";
-  return <PlayClient sessionId={sessionId} gameCode={gameCode} />;
+  return <PlayClient sessionId={sessionId} initialGameCode={gameCode} />;
 }

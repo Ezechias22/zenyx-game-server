@@ -1,656 +1,268 @@
-"use client";
+// app/play/play-client.tsx
+"use client"
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react"
+import "./play-client.css"
 
 type Game = {
-  id: string;
-  name: string;
-  kind: "SLOT" | "CRASH" | "DICE" | string;
+  id?: string
+  name?: string
+  kind?: string
   assets?: {
-    cover?: string;
-    background?: string;
-    symbols?: string[];
-  };
-  ui?: {
-    width?: number;
-    height?: number;
-    aspectRatio?: string;
-  };
-};
+    cover?: string
+    background?: string
+    symbols?: string[]
+  }
+}
 
 type PlayResult = {
-  gameCode?: string;
-  kind?: string;
-  bet?: number;
-  win?: number;
-  balance?: number | { balance?: number };
-  result?: {
-    symbols?: string[]; // parfois le provider met ici
-  };
-  symbols?: string[]; // parfois le provider met ici
-  nonce?: number;
-};
-
-const PROVIDER_BASE_URL = process.env.NEXT_PUBLIC_PROVIDER_BASE_URL; // optionnel si tu veux côté client
-
-function absProviderUrl(path?: string) {
-  const base =
-    process.env.NEXT_PUBLIC_PROVIDER_BASE_URL ||
-    "https://zenyx-games-provider-production.up.railway.app";
-  if (!path) return "";
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  return base.replace(/\/$/, "") + path;
+  sessionId?: string
+  gameCode?: string
+  bet?: number
+  win?: number
+  balance?: number | { balance?: number }
+  currency?: string
+  result?: { symbols?: string[] | string[][] }
 }
 
-function pick<T>(arr: T[]) {
-  return arr[Math.floor(Math.random() * arr.length)];
+function clampNumber(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
 }
 
-function buildRandomGrid(symbols: string[], cols = 5, rows = 3) {
-  const grid: string[][] = [];
-  for (let r = 0; r < rows; r++) {
-    const row: string[] = [];
-    for (let c = 0; c < cols; c++) row.push(pick(symbols));
-    grid.push(row);
+function resolveAssetUrl(pathOrUrl: string | undefined) {
+  if (!pathOrUrl) return ""
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl
+  return `/api/assets?path=${encodeURIComponent(pathOrUrl)}`
+}
+
+function randomGridFromPool(pool: string[], cols = 5, rows = 3): string[][] {
+  const safe = pool?.length ? pool : []
+  const pick = () => (safe.length ? safe[Math.floor(Math.random() * safe.length)] : "")
+  return Array.from({ length: cols }, () => Array.from({ length: rows }, pick))
+}
+
+function normalizeSymbolsToGrid(
+  symbols: string[] | string[][] | undefined,
+  fallbackPool: string[],
+  cols = 5,
+  rows = 3
+): string[][] {
+  if (Array.isArray(symbols) && Array.isArray(symbols[0])) {
+    const s2d = symbols as string[][]
+    const grid = Array.from({ length: cols }, () => Array(rows).fill(""))
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        grid[c][r] = s2d?.[c]?.[r] || fallbackPool[(c * rows + r) % Math.max(1, fallbackPool.length)] || ""
+      }
+    }
+    return grid
   }
-  return grid;
-}
-
-// Provider peut renvoyer 15 symbols en flat, ou 5x3 déjà.
-function normalizeSymbolsToGrid(symbolsFlat: string[], cols = 5, rows = 3) {
-  const s = symbolsFlat.slice(0, cols * rows);
-  const grid: string[][] = [];
-  let i = 0;
-  for (let r = 0; r < rows; r++) {
-    const row: string[] = [];
-    for (let c = 0; c < cols; c++) row.push(s[i++] ?? "");
-    grid.push(row);
+  const flat = (symbols as string[] | undefined) ?? []
+  const grid = Array.from({ length: cols }, () => Array(rows).fill(""))
+  const total = cols * rows
+  for (let i = 0; i < total; i++) {
+    const c = i % cols
+    const r = Math.floor(i / cols)
+    grid[c][r] = flat[i] || fallbackPool[i % Math.max(1, fallbackPool.length)] || ""
   }
-  return grid;
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+  return grid
 }
 
 export default function PlayClient({
   sessionId,
-  gameCode,
+  initialGameCode
 }: {
-  sessionId: string;
-  gameCode: string;
+  sessionId: string
+  initialGameCode: string
 }) {
-  const [games, setGames] = useState<Game[]>([]);
-  const [game, setGame] = useState<Game | null>(null);
+  const [loading, setLoading] = useState(true)
+  const [spinning, setSpinning] = useState(false)
 
-  const [bet, setBet] = useState<number>(1);
-  const [win, setWin] = useState<number>(0);
-  const [balance, setBalance] = useState<number>(0);
+  const [game, setGame] = useState<Game | null>(null)
+  const [gameCode, setGameCode] = useState<string>(initialGameCode || "")
 
-  const [grid, setGrid] = useState<string[][]>(() => [
-    ["", "", "", "", ""],
-    ["", "", "", "", ""],
-    ["", "", "", "", ""],
-  ]);
+  const [bet, setBet] = useState<number>(1)
+  const [win, setWin] = useState<number>(0)
+  const [balance, setBalance] = useState<number>(0)
+  const [currency, setCurrency] = useState<string>("BRL")
 
-  const [spinning, setSpinning] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [grid, setGrid] = useState<string[][]>(() => Array.from({ length: 5 }, () => Array(3).fill("")))
+  const symbolPool = useMemo(() => (game?.assets?.symbols ?? []).filter(Boolean), [game])
+  const bgUrl = useMemo(() => resolveAssetUrl(game?.assets?.background), [game])
 
-  const symbols = useMemo(() => game?.assets?.symbols ?? [], [game]);
-  const bgUrl = useMemo(
-    () => absProviderUrl(game?.assets?.background),
-    [game?.assets?.background]
-  );
+  const spinLock = useRef(false)
 
-  const spinTimer = useRef<number | null>(null);
-
-  // 1) charger catalog + game
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadCatalog() {
-      setErrorMsg("");
-      try {
-        const r = await fetch(
-          "https://zenyx-games-provider-production.up.railway.app/v1/public/games",
-          {
-            headers: {
-              "x-public-token": "zenyx_public_prod_172839",
-              "x-operator-key": "op_4acd0c3c68cc869188e322ef60b4ab2e",
-            },
-            cache: "no-store",
-          }
-        );
-
-        const data = (await r.json()) as Game[];
-        if (cancelled) return;
-
-        setGames(data || []);
-        const found =
-          data?.find((g) => g.id === gameCode) ||
-          data?.find((g) => g.id === (gameCode || "")) ||
-          null;
-        setGame(found);
-
-        // 2) grille initiale immédiate (avant spin)
-        const sym = found?.assets?.symbols ?? [];
-        if (sym.length) setGrid(buildRandomGrid(sym, 5, 3));
-
-        // prefetch symbols
-        for (const p of sym.slice(0, 50)) {
-          const img = new Image();
-          img.src = absProviderUrl(p);
-        }
-      } catch (e: any) {
-        setErrorMsg(e?.message || "Failed to load catalog");
-      }
+    if (!sessionId) {
+      window.location.href = "/"
+      return
     }
 
-    loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, [gameCode]);
+    let alive = true
+    ;(async () => {
+      try {
+        setLoading(true)
+        const res = await fetch("/api/games", { cache: "no-store" })
+        if (!res.ok) throw new Error("Failed to load games")
+        const games = (await res.json()) as Game[]
+        const found = (gameCode && games.find(g => (g.id || "") === gameCode)) || null
+        if (!alive) return
 
-  // cleanup
-  useEffect(() => {
-    return () => {
-      if (spinTimer.current) window.clearTimeout(spinTimer.current);
-    };
-  }, []);
+        setGame(found)
+        if (found?.id) setGameCode(found.id)
 
-  // bet controls
-  const incBet = () => setBet((b) => clamp(b + 1, 1, 999));
-  const decBet = () => setBet((b) => clamp(b - 1, 1, 999));
+        const pool = (found?.assets?.symbols ?? []).filter(Boolean)
+        setGrid(randomGridFromPool(pool, 5, 3))
+
+        pool.slice(0, 60).forEach(p => {
+          const img = new Image()
+          img.src = resolveAssetUrl(p)
+        })
+      } catch {
+        // keep UI alive even if catalog fails
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  const title = game?.name ? `ZENYX • ${game.name}` : "ZENYX • JOUER"
+
+  function betMinus() {
+    setBet(b => clampNumber(b - 1, 1, 1000))
+  }
+  function betPlus() {
+    setBet(b => clampNumber(b + 1, 1, 1000))
+  }
 
   async function doSpin() {
-    if (!sessionId || sessionId.length < 10) {
-      setErrorMsg("Session invalide.");
-      return;
-    }
-    if (spinning) return;
-
-    setErrorMsg("");
-    setSpinning(true);
-
-    // animation: shuffle rapide pendant 700ms
-    if (symbols.length) {
-      const start = Date.now();
-      const tick = () => {
-        const elapsed = Date.now() - start;
-        setGrid(buildRandomGrid(symbols, 5, 3));
-        if (elapsed < 700) {
-          spinTimer.current = window.setTimeout(tick, 60);
-        }
-      };
-      tick();
-    }
-
+    if (!sessionId) return
+    if (spinLock.current) return
     try {
-      const r = await fetch("/api/play", {
+      spinLock.current = true
+      setSpinning(true)
+      setWin(0)
+
+      if (symbolPool.length) setGrid(randomGridFromPool(symbolPool, 5, 3))
+
+      const res = await fetch("/api/play", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, bet }),
-      });
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, bet })
+      })
 
-      const data = (await r.json()) as PlayResult | any;
-
-      if (!r.ok || data?.error) {
-        setErrorMsg(
-          data?.body?.message?.[0] ||
-            data?.body?.message ||
-            "Spin failed (400)"
-        );
-        return;
+      const data = (await res.json()) as PlayResult
+      if (!res.ok) {
+        setSpinning(false)
+        return
       }
 
-      const w = Number(data?.win ?? 0);
-      const b =
-        typeof data?.balance === "number"
-          ? data.balance
-          : Number(data?.balance?.balance ?? 0);
+      const nextWin = typeof data.win === "number" ? data.win : 0
+      const nextCurrency = typeof data.currency === "string" ? data.currency : currency
 
-      setWin(w);
-      setBalance(b);
-
-      const symFlat =
-        (Array.isArray(data?.result?.symbols) ? data.result.symbols : null) ||
-        (Array.isArray(data?.symbols) ? data.symbols : null) ||
-        [];
-
-      // si provider renvoie 15 symbols -> grille directe
-      if (symFlat.length >= 15) {
-        setGrid(normalizeSymbolsToGrid(symFlat, 5, 3));
-      } else if (symbols.length) {
-        // fallback propre
-        setGrid(buildRandomGrid(symbols, 5, 3));
+      let nextBalance = balance
+      if (typeof data.balance === "number") nextBalance = data.balance
+      else if (data.balance && typeof data.balance === "object") {
+        const b = (data.balance as { balance?: number }).balance
+        if (typeof b === "number") nextBalance = b
       }
-    } catch (e: any) {
-      setErrorMsg(e?.message || "Spin failed");
+
+      const nextGrid = normalizeSymbolsToGrid(data?.result?.symbols, symbolPool, 5, 3)
+
+      setTimeout(() => {
+        setGrid(nextGrid)
+        setWin(nextWin)
+        setBalance(nextBalance)
+        setCurrency(nextCurrency)
+        setSpinning(false)
+      }, 260)
     } finally {
-      // stop animation
-      if (spinTimer.current) window.clearTimeout(spinTimer.current);
-      spinTimer.current = null;
-      setSpinning(false);
+      setTimeout(() => {
+        spinLock.current = false
+      }, 260)
     }
   }
 
-  const title = game ? `ZENYX • ${game.name}` : "ZENYX • PLAY";
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        backgroundImage: bgUrl ? `url(${bgUrl})` : undefined,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }}
-    >
-      {/* overlay */}
-      <div
-        style={{
-          minHeight: "100vh",
-          background:
-            "radial-gradient(80% 60% at 50% 0%, rgba(0,0,0,.35), rgba(0,0,0,.82))",
-        }}
-      >
-        {/* top bar minimal */}
-        <div
-          style={{
-            maxWidth: 1100,
-            margin: "0 auto",
-            padding: "16px 14px 10px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div style={{ color: "white" }}>
-            <div style={{ fontWeight: 800, letterSpacing: 0.6 }}>{title}</div>
-            <div style={{ opacity: 0.75, fontSize: 12 }}>
-              Session: {sessionId || "—"}
-            </div>
-          </div>
+    <div className="playRoot">
+      <div className="bg" style={{ backgroundImage: bgUrl ? `url("${bgUrl}")` : undefined }} />
+      <div className="overlay" />
 
-          <a
-            href="/"
-            style={{
-              color: "white",
-              textDecoration: "none",
-              background: "rgba(255,255,255,.08)",
-              border: "1px solid rgba(255,255,255,.12)",
-              padding: "10px 12px",
-              borderRadius: 12,
-              fontWeight: 700,
-              fontSize: 13,
-              whiteSpace: "nowrap",
-            }}
-          >
-            ← Lobby
-          </a>
-        </div>
-
-        {/* reels area */}
-        <div
-          style={{
-            maxWidth: 1100,
-            margin: "0 auto",
-            padding: "0 14px 120px", // espace pour footer fixed (mobile)
-          }}
-        >
-          <div
-            style={{
-              borderRadius: 20,
-              border: "1px solid rgba(255,255,255,.10)",
-              background: "rgba(10,14,24,.55)",
-              boxShadow: "0 20px 60px rgba(0,0,0,.55)",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                padding: 10,
-                borderBottom: "1px solid rgba(255,255,255,.08)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 10,
-              }}
-            >
-              <div style={{ color: "rgba(255,255,255,.85)", fontWeight: 800 }}>
-                SLOT
-              </div>
-              <div
-                style={{
-                  color: "rgba(255,255,255,.65)",
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                Symbols: {symbols.length || 0}
-              </div>
-            </div>
-
-            {/* grid 5x3 responsive (mobile compact) */}
-            <div
-              style={{
-                padding: 12,
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-                  gap: 8, // moins écarté
-                }}
-              >
-                {grid.flatMap((row, r) =>
-                  row.map((cell, c) => {
-                    const url = absProviderUrl(cell);
-                    return (
-                      <div
-                        key={`${r}-${c}`}
-                        style={{
-                          borderRadius: 16,
-                          border: "1px solid rgba(255,255,255,.10)",
-                          background:
-                            "linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03))",
-                          aspectRatio: "1 / 1",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {url ? (
-                          <img
-                            src={url}
-                            alt="symbol"
-                            draggable={false}
-                            style={{
-                              width: "clamp(38px, 6vw, 88px)", // plus petit sur mobile
-                              height: "clamp(38px, 6vw, 88px)",
-                              objectFit: "contain",
-                              imageRendering: "auto",
-                              userSelect: "none",
-                              filter: spinning
-                                ? "blur(0.3px) brightness(0.98)"
-                                : "none",
-                              transform: spinning
-                                ? "translateY(2px) scale(0.98)"
-                                : "none",
-                              transition: "transform 120ms ease",
-                            }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: "clamp(20px, 4vw, 40px)",
-                              height: "clamp(20px, 4vw, 40px)",
-                              borderRadius: 10,
-                              background: "rgba(255,255,255,.06)",
-                            }}
-                          />
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {errorMsg ? (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: "10px 12px",
-                    borderRadius: 14,
-                    background: "rgba(255, 80, 80, .12)",
-                    border: "1px solid rgba(255, 80, 80, .22)",
-                    color: "rgba(255,255,255,.92)",
-                    fontWeight: 700,
-                    fontSize: 13,
-                  }}
-                >
-                  {String(errorMsg)}
-                </div>
-              ) : null}
-            </div>
+      <header className="topBar">
+        <div className="left">
+          <div className="brand">{title}</div>
+          <div className="sub">
+            Session : <span className="mono">{sessionId}</span>
           </div>
         </div>
 
-        {/* footer fixed compact (mobile-friendly) */}
-        <div
-          style={{
-            position: "fixed",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            padding: "10px 12px",
-            background:
-              "linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.65) 18%, rgba(0,0,0,.92))",
-          }}
-        >
-          <div
-            className="zenyx-footer-grid"
-            style={{
-              maxWidth: 1100,
-              margin: "0 auto",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr auto",
-              gap: 10,
-              alignItems: "stretch",
-            }}
-          >
-            {/* BET */}
-            <div
-              style={{
-                borderRadius: 16,
-                border: "1px solid rgba(255,255,255,.10)",
-                background: "rgba(10,14,24,.60)",
-                padding: 10,
-                minWidth: 0,
-              }}
-            >
-              <div
-                style={{
-                  color: "rgba(255,255,255,.65)",
-                  fontSize: 12,
-                  fontWeight: 800,
-                  letterSpacing: 0.6,
-                }}
-              >
-                BET
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  marginTop: 6,
-                }}
-              >
-                <button
-                  onClick={decBet}
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,.12)",
-                    background: "rgba(255,255,255,.06)",
-                    color: "white",
-                    fontWeight: 900,
-                    fontSize: 18,
-                    cursor: "pointer",
-                  }}
-                >
-                  −
-                </button>
-
-                <div
-                  style={{
-                    color: "white",
-                    fontWeight: 900,
-                    fontSize: 18,
-                    minWidth: 28,
-                    textAlign: "center",
-                  }}
-                >
-                  {bet}
-                </div>
-
-                <button
-                  onClick={incBet}
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,.12)",
-                    background: "rgba(255,255,255,.06)",
-                    color: "white",
-                    fontWeight: 900,
-                    fontSize: 18,
-                    cursor: "pointer",
-                  }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            {/* WIN */}
-            <div
-              style={{
-                borderRadius: 16,
-                border: "1px solid rgba(255,255,255,.10)",
-                background: "rgba(10,14,24,.60)",
-                padding: 10,
-                minWidth: 0,
-              }}
-            >
-              <div
-                style={{
-                  color: "rgba(255,255,255,.65)",
-                  fontSize: 12,
-                  fontWeight: 800,
-                  letterSpacing: 0.6,
-                }}
-              >
-                WIN
-              </div>
-              <div
-                style={{
-                  color: "white",
-                  fontWeight: 900,
-                  fontSize: 20,
-                  marginTop: 6,
-                }}
-              >
-                {Number.isFinite(win) ? win : 0}
-              </div>
-            </div>
-
-            {/* BALANCE */}
-            <div
-              style={{
-                borderRadius: 16,
-                border: "1px solid rgba(255,255,255,.10)",
-                background: "rgba(10,14,24,.60)",
-                padding: 10,
-                minWidth: 0,
-              }}
-            >
-              <div
-                style={{
-                  color: "rgba(255,255,255,.65)",
-                  fontSize: 12,
-                  fontWeight: 800,
-                  letterSpacing: 0.6,
-                }}
-              >
-                BALANCE
-              </div>
-              <div
-                style={{
-                  color: "white",
-                  fontWeight: 900,
-                  fontSize: 20,
-                  marginTop: 6,
-                }}
-              >
-                {Number.isFinite(balance) ? balance : 0}{" "}
-                <span style={{ opacity: 0.7, fontSize: 14 }}>BRL</span>
-              </div>
-            </div>
-
-            {/* SPIN */}
-            <button
-              onClick={doSpin}
-              disabled={spinning}
-              style={{
-                alignSelf: "stretch",
-                minWidth: 92,
-                borderRadius: 18,
-                border: "1px solid rgba(255,255,255,.14)",
-                background: spinning
-                  ? "linear-gradient(135deg, rgba(140,80,255,.55), rgba(90,140,255,.35))"
-                  : "linear-gradient(135deg, rgba(155,90,255,.95), rgba(90,140,255,.75))",
-                color: "white",
-                fontWeight: 950,
-                letterSpacing: 0.8,
-                cursor: spinning ? "not-allowed" : "pointer",
-                boxShadow: spinning
-                  ? "0 0 0 rgba(0,0,0,0)"
-                  : "0 12px 30px rgba(120,90,255,.30)",
-                position: "relative",
-                overflow: "hidden",
-              }}
-            >
-              <span style={{ position: "relative", zIndex: 2 }}>
-                {spinning ? "SPIN…" : "SPIN"}
-              </span>
-
-              {/* ring animation */}
-              <span
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  inset: -40,
-                  background:
-                    "conic-gradient(from 180deg, rgba(255,255,255,.0), rgba(255,255,255,.22), rgba(255,255,255,0))",
-                  opacity: spinning ? 1 : 0,
-                  transform: spinning ? "rotate(360deg)" : "rotate(0deg)",
-                  transition: spinning ? "none" : "opacity 180ms ease",
-                  animation: spinning ? "spinRing 900ms linear infinite" : "none",
-                }}
-              />
-              <style>{`
-                  @keyframes spinRing {
-                    from { transform: rotate(0deg); }
-                    to { transform: rotate(360deg); }
-                  }
-
-                  /* mobile: footer plus compact */
-                  @media (max-width: 720px) {
-                    .zenyx-footer-grid {
-                      grid-template-columns: 1fr 1fr 1fr 88px !important;
-                      gap: 8px !important;
-                    }
-                  }
-
-                  /* très petit mobile: 2 lignes */
-                  @media (max-width: 420px) {
-                    .zenyx-footer-grid {
-                      grid-template-columns: 1fr 1fr !important;
-                    }
-                  }
-                `}</style>
-
-            </button>
-          </div>
+        <div className="right">
+          <button className="ghostBtn" onClick={() => (window.location.href = "/")} type="button">
+            ← Hall d’entrée
+          </button>
         </div>
-      </div>
+      </header>
+
+      <main className="stage">
+        <div className="reelFrame">
+          <div className={`reels ${spinning ? "spinning" : ""}`}>
+            {Array.from({ length: 5 }).map((_, col) => (
+              <div className="reelCol" key={col}>
+                {Array.from({ length: 3 }).map((__, row) => {
+                  const path = grid?.[col]?.[row] || ""
+                  const src = resolveAssetUrl(path)
+                  return (
+                    <div className="cell" key={`${col}-${row}`}>
+                      {src ? <img className="sym" src={src} alt="symbol" draggable={false} /> : <div className="symPlaceholder" />}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+          <div className={`winGlow ${win > 0 ? "on" : ""}`} />
+        </div>
+      </main>
+
+      {/* MOBILE-FIRST footer: 2 rows, SPIN centered, never cut */}
+      <footer className="footer">
+        <div className="footerGrid">
+          <div className="panel">
+            <div className="label">PARI</div>
+            <div className="value">{bet}</div>
+            <div className="betControls">
+              <button className="mini" onClick={betMinus} type="button" aria-label="Minus">
+                −
+              </button>
+              <button className="mini" onClick={betPlus} type="button" aria-label="Plus">
+                +
+              </button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="label">GAGNER</div>
+            <div className={`value ${win > 0 ? "win" : ""}`}>{win}</div>
+          </div>
+
+          <div className="panel">
+            <div className="label">ÉQUILIBRE</div>
+            <div className="value">
+              {balance} <span className="cur">{currency}</span>
+            </div>
+          </div>
+
+          <button className={`spinBtn ${spinning ? "busy" : ""}`} onClick={doSpin} disabled={spinning || loading} type="button">
+            <div className="spinRing" />
+            <div className="spinText">{spinning ? "..." : "SPIN"}</div>
+          </button>
+        </div>
+      </footer>
     </div>
-  );
+  )
 }
