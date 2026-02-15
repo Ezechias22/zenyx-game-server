@@ -1,3 +1,4 @@
+// app/play/page.tsx
 import { redirect } from "next/navigation"
 import PlayClient from "./play-client"
 

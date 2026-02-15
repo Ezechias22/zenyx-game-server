@@ -1,495 +1,358 @@
+// app/play/play-client.tsx
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 type Game = {
   id: string
   name: string
   kind: "SLOT" | "CRASH" | "DICE" | string
-  rtp?: number
-  volatility?: string
-  ui?: { aspectRatio?: string; width?: number; height?: number }
   assets?: {
     cover?: string
     background?: string
-    symbols?: string[] // array de paths "/assets/..."
+    symbols?: string[]
   }
 }
 
-type ProviderPlayResponse = {
-  sessionId?: string
-  gameCode?: string
-  kind?: string
-  bet?: number
-  win?: number
-  balance?: number
-  currency?: string
-  nonce?: number
-  result?: {
-    symbols?: string[] // IMPORTANT: 15 symbols = 5x3, ordre provider
-    [k: string]: unknown
-  }
-  [k: string]: unknown
-}
-
-const REELS = 5
-const ROWS = 3
-const TOTAL = REELS * ROWS
-
-function safeStr(v: unknown) {
-  return typeof v === "string" ? v : ""
-}
-function safeNum(v: unknown, fallback = 0) {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : fallback
-}
-
-function flattenToGrid(symbols15: string[]) {
-  // Provider doit renvoyer 15 symbols (5x3).
-  // On accepte aussi autre taille -> on remplit.
-  const out = Array.from({ length: REELS }, () => Array.from({ length: ROWS }, () => ""))
-  for (let i = 0; i < TOTAL; i++) {
-    const s = symbols15[i] || ""
-    const reel = i % REELS
-    const row = Math.floor(i / REELS)
-    if (row < ROWS) out[reel][row] = s
-  }
-  return out
-}
-
-function randomGridFromPool(pool: string[]) {
-  const p = pool.length ? pool : [""]
-  const pick = () => p[Math.floor(Math.random() * p.length)] || ""
-  const out = Array.from({ length: REELS }, () => Array.from({ length: ROWS }, () => pick()))
-  return out
-}
-
-function toAssetProxy(path: string) {
-  // path = "/assets/xxx.png" → proxy même origin (évite NotSameOrigin)
-  return `/api/assets?path=${encodeURIComponent(path)}`
-}
-
-export default function PlayClient({
-  sessionId,
-  initialGameCode
-}: {
+type PlayClientProps = {
   sessionId: string
-  initialGameCode: string
-}) {
-  const [games, setGames] = useState<Game[]>([])
-  const [gameCode, setGameCode] = useState<string>(initialGameCode || "")
-  const [grid, setGrid] = useState<string[][]>(() => randomGridFromPool([]))
+  initialGameCode?: string
+}
+
+type ApiError = { error?: string; message?: string; statusCode?: number; details?: any }
+
+function safeText(v: unknown) {
+  if (v == null) return ""
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v)
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return String(v)
+  }
+}
+
+function pickRandom<T>(arr: T[]) {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+
+function makeGrid(symbols: string[], reels = 5, rows = 3) {
+  const g: string[][] = []
+  for (let c = 0; c < reels; c++) {
+    const col: string[] = []
+    for (let r = 0; r < rows; r++) col.push(pickRandom(symbols))
+    g.push(col)
+  }
+  return g
+}
+
+function normalizeSymbolsToGrid(input: any, reels = 5, rows = 3): string[][] | null {
+  if (!input) return null
+
+  // grid [reel][row]
+  if (Array.isArray(input) && Array.isArray(input[0])) {
+    const grid = input as any[][]
+    const out: string[][] = []
+    for (let c = 0; c < Math.min(reels, grid.length); c++) {
+      out[c] = []
+      for (let r = 0; r < Math.min(rows, grid[c]?.length ?? 0); r++) out[c][r] = String(grid[c][r] ?? "")
+      while (out[c].length < rows) out[c].push("")
+    }
+    while (out.length < reels) out.push(Array.from({ length: rows }, () => ""))
+    return out
+  }
+
+  // flat
+  if (Array.isArray(input) && input.length >= reels * rows) {
+    const flat = input.map((x) => String(x ?? ""))
+
+    // reel-major
+    const reelMajor: string[][] = []
+    for (let c = 0; c < reels; c++) reelMajor.push(flat.slice(c * rows, c * rows + rows))
+    if (reelMajor.flat().filter(Boolean).length >= 5) return reelMajor
+
+    // row-major fallback
+    const rowMajor: string[][] = Array.from({ length: reels }, () => Array.from({ length: rows }, () => ""))
+    let i = 0
+    for (let r = 0; r < rows; r++) for (let c = 0; c < reels; c++) rowMajor[c][r] = flat[i++] ?? ""
+    return rowMajor
+  }
+
+  const maybe = input?.symbols ?? input?.reels ?? input?.grid
+  if (maybe) return normalizeSymbolsToGrid(maybe, reels, rows)
+
+  return null
+}
+
+export default function PlayClient({ sessionId, initialGameCode = "" }: PlayClientProps) {
+  const router = useRouter()
+
+  const [catalog, setCatalog] = useState<Game[]>([])
+  const [gameCode, setGameCode] = useState<string>(initialGameCode)
+  const [game, setGame] = useState<Game | null>(null)
 
   const [bet, setBet] = useState<number>(1)
   const [win, setWin] = useState<number>(0)
   const [balance, setBalance] = useState<number>(0)
-  const [currency, setCurrency] = useState<string>("BRL")
 
-  const [spinning, setSpinning] = useState<boolean>(false)
-  const [flashWin, setFlashWin] = useState<boolean>(false)
+  const [grid, setGrid] = useState<string[][]>(() =>
+    Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ""))
+  )
+  const [spinning, setSpinning] = useState(false)
+  const [err, setErr] = useState<string>("")
 
-  const spinTimer = useRef<number | null>(null)
-  const flashTimer = useRef<number | null>(null)
+  const spinAnimTimer = useRef<number | null>(null)
+
+  const providerBase = useMemo(() => {
+    const raw =
+      (process.env.NEXT_PUBLIC_PROVIDER_BASE_URL as string | undefined) ||
+      (process.env.NEXT_PUBLIC_PROVIDER_ORIGIN as string | undefined) ||
+      "https://zenyx-games-provider-production.up.railway.app"
+    return raw.replace(/\/+$/, "")
+  }, [])
+
+  const bets = useMemo(() => [1, 2, 5, 10], [])
 
   useEffect(() => {
     return () => {
-      if (spinTimer.current) window.clearInterval(spinTimer.current)
-      if (flashTimer.current) window.clearTimeout(flashTimer.current)
+      if (spinAnimTimer.current) window.clearInterval(spinAnimTimer.current)
     }
   }, [])
 
-  // 1) Load catalog (game list)
+  // load catalog (server route hides headers)
   useEffect(() => {
-    let dead = false
-    fetch("/api/games", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((data) => {
-        if (dead) return
-        const list: Game[] = Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
-        setGames(list)
+    let alive = true
+    ;(async () => {
+      setErr("")
+      try {
+        const res = await fetch("/api/games", { cache: "no-store" })
+        if (!res.ok) throw new Error(`games ${res.status}`)
+        const data = await res.json()
+        const list: Game[] = Array.isArray(data) ? data : []
+        if (!alive) return
 
-        // Si pas de gameCode dans l'URL, on peut essayer de deviner plus tard (après /api/play),
-        // mais pour l'UI initiale on reste safe.
-      })
-      .catch(() => {
-        if (dead) return
-        setGames([])
-      })
+        setCatalog(list)
+
+        const byId = gameCode ? list.find((g) => g.id === gameCode) : null
+        const fallbackSlot = list.find((g) => g.kind === "SLOT") ?? list[0] ?? null
+        const chosen = byId ?? fallbackSlot
+
+        setGame(chosen ?? null)
+        if (!gameCode && chosen?.id) setGameCode(chosen.id)
+      } catch (e: any) {
+        if (!alive) return
+        setErr(e?.message ?? "Failed to load catalog")
+      }
+    })()
     return () => {
-      dead = true
+      alive = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const game: Game | undefined = useMemo(() => {
-    if (!gameCode) return undefined
-    return games.find((g) => g.id === gameCode)
-  }, [games, gameCode])
-
-  const symbolPool: string[] = useMemo(() => {
-    const s = game?.assets?.symbols
-    return Array.isArray(s) ? s.filter((x) => typeof x === "string" && x.length > 0) : []
-  }, [game])
-
-  // 2) Ensure initial grid shows symbols immediately when catalog loaded
+  // initial grid + preload symbols
   useEffect(() => {
-    if (!symbolPool.length) return
-    setGrid(randomGridFromPool(symbolPool))
-    // Preload symbols (best-effort)
-    symbolPool.slice(0, 40).forEach((p) => {
+    const symbols = game?.assets?.symbols ?? []
+    if (!symbols.length) return
+
+    for (const p of symbols.slice(0, 80)) {
+      const url = `${providerBase}${p}`
       const img = new Image()
-      img.src = toAssetProxy(p)
-    })
-  }, [symbolPool])
+      img.src = url
+    }
 
-  const backgroundUrl = useMemo(() => {
+    setGrid(makeGrid(symbols, 5, 3))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game?.id])
+
+  const bgUrl = useMemo(() => {
     const p = game?.assets?.background
-    return p ? toAssetProxy(p) : ""
-  }, [game])
+    if (!p) return ""
+    return `${providerBase}${p}`
+  }, [game?.assets?.background, providerBase])
+
+  const symUrl = (p: string) => (p ? `${providerBase}${p}` : "")
 
   async function doSpin() {
     if (spinning) return
+    setErr("")
     setSpinning(true)
-    setFlashWin(false)
 
-    // Anim "shuffle" pendant le call API
-    if (spinTimer.current) window.clearInterval(spinTimer.current)
-    if (symbolPool.length) {
-      spinTimer.current = window.setInterval(() => {
-        setGrid(randomGridFromPool(symbolPool))
-      }, 70)
+    const symbols = (game?.assets?.symbols ?? []).slice()
+    if (symbols.length) {
+      if (spinAnimTimer.current) window.clearInterval(spinAnimTimer.current)
+      spinAnimTimer.current = window.setInterval(() => {
+        setGrid(makeGrid(symbols, 5, 3))
+      }, 80)
     }
 
-    let payload: ProviderPlayResponse = {}
     try {
       const res = await fetch("/api/play", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        cache: "no-store",
         body: JSON.stringify({ sessionId, bet })
       })
-      payload = await res.json().catch(() => ({}))
-    } catch {
-      payload = {}
-    }
 
-    // Stop animation et settle
-    const settleMs = 900
-    window.setTimeout(() => {
-      if (spinTimer.current) window.clearInterval(spinTimer.current)
-      spinTimer.current = null
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const m = (json as ApiError)?.message ?? (json as ApiError)?.error ?? `Spin failed (${res.status})`
+        throw new Error(typeof m === "string" ? m : safeText(m))
+      }
+
+      const newWin = Number(json?.win ?? 0)
+      const newBalance = Number(json?.balance ?? 0)
+      setWin(Number.isFinite(newWin) ? newWin : 0)
+      setBalance(Number.isFinite(newBalance) ? newBalance : 0)
+
+      const gc = typeof json?.gameCode === "string" ? json.gameCode : ""
+      if (gc && gc !== gameCode) {
+        setGameCode(gc)
+        const found = catalog.find((g) => g.id === gc) ?? null
+        if (found) setGame(found)
+      }
+
+      const resultSymbols =
+        json?.provider?.result?.symbols ??
+        json?.provider?.result ??
+        json?.result?.symbols ??
+        json?.result
+
+      const gridFromResult = normalizeSymbolsToGrid(resultSymbols, 5, 3)
+      if (gridFromResult) setGrid(gridFromResult)
+    } catch (e: any) {
+      setErr(e?.message ?? "Spin failed")
+    } finally {
+      if (spinAnimTimer.current) {
+        window.clearInterval(spinAnimTimer.current)
+        spinAnimTimer.current = null
+      }
       setSpinning(false)
-    }, settleMs)
-
-    // Update stats (NE PAS rendre d'objet brut)
-    const nextWin = safeNum(payload?.win, 0)
-    const nextBalance = safeNum(payload?.balance, balance)
-    const nextCurrency = safeStr(payload?.currency) || currency
-
-    setWin(nextWin)
-    setBalance(nextBalance)
-    setCurrency(nextCurrency)
-
-    // Update gameCode if provider returns it (important si /play n'a pas gameCode)
-    const gc = safeStr(payload?.gameCode)
-    if (gc && gc !== gameCode) setGameCode(gc)
-
-    // 3) Replace grid by provider result.symbols if provided
-    const resultSymbols = payload?.result?.symbols
-    if (Array.isArray(resultSymbols) && resultSymbols.length) {
-      const clean = resultSymbols.filter((x) => typeof x === "string" && x.length > 0)
-      // settle slightly after animation
-      window.setTimeout(() => {
-        setGrid(flattenToGrid(clean))
-      }, settleMs - 120)
-    } else {
-      // fallback: at least show a stable grid
-      window.setTimeout(() => {
-        if (symbolPool.length) setGrid(randomGridFromPool(symbolPool))
-      }, settleMs - 120)
-    }
-
-    if (nextWin > 0) {
-      window.setTimeout(() => {
-        setFlashWin(true)
-        if (flashTimer.current) window.clearTimeout(flashTimer.current)
-        flashTimer.current = window.setTimeout(() => setFlashWin(false), 900)
-      }, settleMs + 40)
     }
   }
 
   return (
-    <main style={page(backgroundUrl)}>
-      {/* Header compact (pas de panels en haut) */}
-      <header style={headerBar}>
-        <div style={{ display: "grid", gap: 2 }}>
-          <div style={{ fontWeight: 950, letterSpacing: 0.2 }}>
-            {game?.name ? `ZENYX • ${game.name}` : "ZENYX • PLAY"}
-          </div>
-          <div style={{ opacity: 0.75, fontSize: 12 }}>
-            Session:{" "}
-            <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{sessionId}</span>
-          </div>
-        </div>
+    <div className="min-h-screen text-white">
+      {/* Background */}
+      <div
+        className="fixed inset-0 -z-10"
+        style={{
+          backgroundImage: bgUrl ? `url(${bgUrl})` : undefined,
+          backgroundSize: "cover",
+          backgroundPosition: "center"
+        }}
+      />
+      <div className="fixed inset-0 -z-10 bg-black/70" />
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <a href="/" style={btnGhost}>
+      {/* Header (NO SPIN here) */}
+      <header className="mx-auto w-full max-w-5xl px-4 pt-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xl font-extrabold tracking-wide">
+              ZENYX • {game?.name ?? "PLAY"}
+            </div>
+            <div className="text-xs text-white/60 break-all">Session: {sessionId}</div>
+            {err ? <div className="mt-2 text-xs text-red-300">{err}</div> : null}
+          </div>
+
+          <Link
+            href="/"
+            className="shrink-0 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+          >
             ← Lobby
-          </a>
-          <button onClick={doSpin} disabled={spinning} style={btnPrimary}>
-            {spinning ? "SPIN..." : "SPIN"}
-          </button>
+          </Link>
         </div>
       </header>
 
       {/* Stage */}
-      <section style={stageWrap}>
-        <div style={stageInner}>
-          {/* Overlay flash win */}
-          <div
-            style={{
-              pointerEvents: "none",
-              position: "absolute",
-              inset: 0,
-              opacity: flashWin ? 1 : 0,
-              transition: "opacity .15s ease",
-              background: "radial-gradient(circle at 50% 45%, rgba(124,58,237,0.55), transparent 60%)",
-              mixBlendMode: "screen"
-            }}
-          />
-
-          {/* Responsive grid reels */}
-          <div style={reelsGrid}>
-            {Array.from({ length: REELS }).map((_, reelIdx) => (
-              <div key={reelIdx} style={reelCol(spinning, reelIdx)}>
-                {Array.from({ length: ROWS }).map((__, rowIdx) => {
-                  const sym = grid[reelIdx]?.[rowIdx] || ""
-                  const src = sym ? toAssetProxy(sym) : ""
-                  const highlight = flashWin && rowIdx === 1
-                  return (
-                    <div key={rowIdx} style={cell(highlight)}>
-                      {src ? (
-                        <img
-                          src={src}
-                          alt="symbol"
-                          loading="lazy"
-                          decoding="async"
-                          style={symbolImg}
-                          draggable={false}
-                        />
-                      ) : (
-                        <div style={{ opacity: 0.35, fontSize: 12 }}> </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-
-          <div style={glass} />
-        </div>
-      </section>
-
-      {/* Sticky Footer (BET / WIN / BALANCE + SPIN) */}
-      <footer style={footerSticky}>
-        <div style={footerCards}>
-          <div style={miniCard}>
-            <div style={miniLabel}>BET</div>
-            <div style={miniValue}>{bet}</div>
-            <div style={betRow}>
-              {[1, 2, 5, 10].map((x) => (
-                <button key={x} onClick={() => setBet(x)} style={pill(bet === x)}>
-                  {x}
-                </button>
+      <main className="mx-auto w-full max-w-5xl px-4 pb-40 pt-4">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-3 shadow-[0_0_80px_rgba(0,0,0,0.55)]">
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+            <div className="grid grid-cols-5 gap-3">
+              {Array.from({ length: 5 }).map((_, col) => (
+                <div key={col} className="rounded-2xl border border-white/10 bg-white/5 p-2">
+                  <div className="grid grid-rows-3 gap-2">
+                    {Array.from({ length: 3 }).map((__, row) => {
+                      const p = grid?.[col]?.[row] ?? ""
+                      const u = p ? symUrl(p) : ""
+                      return (
+                        <div
+                          key={row}
+                          className="relative overflow-hidden rounded-xl border border-white/10 bg-black/20"
+                          style={{ aspectRatio: "1 / 1" }}
+                        >
+                          {u ? (
+                            <img
+                              src={u}
+                              alt={`sym-${col}-${row}`}
+                              className={`absolute inset-0 m-auto h-[82%] w-[82%] object-contain transition-transform ${
+                                spinning ? "scale-[0.92] opacity-75 blur-[0.2px]" : "scale-100 opacity-100"
+                              }`}
+                              loading="eager"
+                              decoding="async"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
+        </div>
+      </main>
 
-          <div style={miniCard}>
-            <div style={miniLabel}>WIN</div>
-            <div style={miniValue}>{win}</div>
-          </div>
+      {/* Sticky footer (ONLY SPIN here) */}
+      <div className="fixed inset-x-0 bottom-0 z-50 bg-black/50 backdrop-blur-md">
+        <div className="mx-auto w-full max-w-5xl px-4 pb-4 pt-3">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="text-[11px] font-semibold text-white/70">BET</div>
+              <div className="mt-1 text-2xl font-bold">{bet}</div>
+              <div className="mt-2 flex gap-2">
+                {bets.map((b) => (
+                  <button
+                    key={b}
+                    onClick={() => setBet(b)}
+                    className={`h-9 w-9 rounded-full border text-sm font-semibold ${
+                      bet === b
+                        ? "border-white/20 bg-violet-600/90"
+                        : "border-white/10 bg-white/5 hover:bg-white/10"
+                    }`}
+                    aria-label={`Bet ${b}`}
+                  >
+                    {b}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-          <div style={miniCard}>
-            <div style={miniLabel}>BALANCE</div>
-            <div style={miniValue}>
-              {balance} <span style={{ opacity: 0.75, fontSize: 14 }}>{currency}</span>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="text-[11px] font-semibold text-white/70">WIN</div>
+              <div className="mt-1 text-2xl font-bold">{Number(win).toFixed(0)}</div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="text-[11px] font-semibold text-white/70">BALANCE</div>
+              <div className="mt-1 text-2xl font-bold">
+                {Number(balance).toFixed(0)}{" "}
+                <span className="text-sm font-semibold text-white/70">BRL</span>
+              </div>
             </div>
           </div>
+
+          <button
+            onClick={doSpin}
+            disabled={spinning}
+            className="mt-3 w-full rounded-2xl bg-violet-600 px-4 py-4 text-lg font-extrabold tracking-wide shadow-[0_10px_35px_rgba(124,58,237,0.35)] disabled:opacity-60"
+          >
+            {spinning ? "SPINNING…" : "SPIN"}
+          </button>
         </div>
-
-        <button onClick={doSpin} disabled={spinning} style={footerSpin}>
-          {spinning ? "SPIN..." : "SPIN"}
-        </button>
-      </footer>
-
-      {/* spacer pour éviter que le footer cache la grille */}
-      <div style={{ height: 140 }} />
-    </main>
+      </div>
+    </div>
   )
-}
-
-/* ---------------- styles (inline, production-safe) ---------------- */
-
-const page = (backgroundUrl: string): React.CSSProperties => ({
-  minHeight: "100vh",
-  color: "#fff",
-  background: backgroundUrl
-    ? `linear-gradient(rgba(0,0,0,0.76), rgba(0,0,0,0.9)), url(${backgroundUrl}) center/cover no-repeat`
-    : "#060913",
-  padding: 16,
-  display: "grid",
-  gap: 12
-})
-
-const headerBar: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap"
-}
-
-const btnGhost: React.CSSProperties = {
-  textDecoration: "none",
-  color: "#fff",
-  opacity: 0.92,
-  padding: "10px 12px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  fontWeight: 900,
-  fontSize: 13
-}
-
-const btnPrimary: React.CSSProperties = {
-  padding: "10px 16px",
-  borderRadius: 12,
-  background: "#7c3aed",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 13,
-  cursor: "pointer"
-}
-
-const stageWrap: React.CSSProperties = {
-  width: "100%",
-  display: "grid",
-  placeItems: "center"
-}
-
-const stageInner: React.CSSProperties = {
-  position: "relative",
-  width: "100%",
-  maxWidth: 980,
-  borderRadius: 18,
-  overflow: "hidden",
-  border: "1px solid rgba(255,255,255,0.10)",
-  background: "rgba(10,14,24,0.68)"
-}
-
-const reelsGrid: React.CSSProperties = {
-  width: "100%",
-  padding: 14,
-  display: "grid",
-  gap: 10,
-  // Responsive: mobile 3-4 colonnes auto, desktop 5 colonnes
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(160px, 30vw), 1fr))",
-  alignItems: "stretch"
-}
-
-const reelCol = (spinning: boolean, idx: number): React.CSSProperties => ({
-  background: "rgba(17,24,39,0.62)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  borderRadius: 14,
-  overflow: "hidden",
-  display: "grid",
-  gridTemplateRows: "repeat(3, 1fr)",
-  minHeight: "clamp(240px, 42vw, 420px)",
-  transform: spinning ? `translateY(${(idx % 2 === 0 ? -1 : 1) * 8}px)` : "translateY(0px)",
-  transition: "transform .18s ease"
-})
-
-const cell = (highlight: boolean): React.CSSProperties => ({
-  display: "grid",
-  placeItems: "center",
-  background: highlight ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.03)",
-  borderBottom: "1px solid rgba(255,255,255,0.06)"
-})
-
-const symbolImg: React.CSSProperties = {
-  width: "clamp(56px, 12vw, 92px)",
-  height: "clamp(56px, 12vw, 92px)",
-  objectFit: "contain",
-  filter: "drop-shadow(0 6px 18px rgba(0,0,0,0.45))"
-}
-
-const glass: React.CSSProperties = {
-  pointerEvents: "none",
-  position: "absolute",
-  inset: 0,
-  background:
-    "linear-gradient(135deg, rgba(255,255,255,0.07) 0%, transparent 35%, transparent 70%, rgba(255,255,255,0.05) 100%)",
-  opacity: 0.6
-}
-
-const footerSticky: React.CSSProperties = {
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  padding: 12,
-  background: "linear-gradient(to top, rgba(0,0,0,0.88), rgba(0,0,0,0.55))",
-  backdropFilter: "blur(10px)",
-  borderTop: "1px solid rgba(255,255,255,0.10)",
-  zIndex: 50,
-  display: "grid",
-  gap: 10
-}
-
-const footerCards: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 980,
-  margin: "0 auto",
-  display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  gap: 10
-}
-
-const miniCard: React.CSSProperties = {
-  background: "rgba(17,24,39,0.72)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  borderRadius: 14,
-  padding: 12,
-  minHeight: 78
-}
-
-const miniLabel: React.CSSProperties = { opacity: 0.7, fontSize: 12, fontWeight: 950 }
-const miniValue: React.CSSProperties = { marginTop: 6, fontSize: 18, fontWeight: 950 }
-
-const betRow: React.CSSProperties = { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }
-
-const pill = (active: boolean): React.CSSProperties => ({
-  padding: "7px 10px",
-  borderRadius: 999,
-  background: active ? "#7c3aed" : "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 12,
-  cursor: "pointer"
-})
-
-const footerSpin: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 980,
-  margin: "0 auto",
-  padding: "14px 16px",
-  borderRadius: 14,
-  background: "#7c3aed",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "#fff",
-  fontWeight: 950,
-  fontSize: 14,
-  cursor: "pointer"
 }
