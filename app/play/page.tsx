@@ -28,13 +28,13 @@ async function createSession(gameCode: string): Promise<SessionResponse> {
   )
 
   if (!res.ok) {
-    throw new Error("Failed to create session")
+    throw new Error("Session creation failed")
   }
 
   return res.json()
 }
 
-export default async function PlayPage({
+export default async function Play({
   searchParams,
 }: {
   searchParams: { gameCode?: string }
