@@ -1,25 +1,18 @@
 export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
-
-import { fetchGames } from "@/lib/provider"
 
 export async function GET() {
-  try {
-    const data = await fetchGames()
+  const PROVIDER_BASE_URL = process.env.PROVIDER_BASE_URL!
+  const PUBLIC_TOKEN = process.env.PUBLIC_TOKEN!
+  const OPERATOR_KEY = process.env.OPERATOR_KEY!
 
-    // Si provider renvoie une erreur
-    if ((data as any)?.error) {
-      return Response.json(
-        (data as any).body ?? { error: "Provider error" },
-        { status: (data as any).status || 502 }
-      )
-    }
+  const res = await fetch(`${PROVIDER_BASE_URL}/v1/public/games`, {
+    cache: "no-store",
+    headers: {
+      "x-public-token": PUBLIC_TOKEN,
+      "x-operator-key": OPERATOR_KEY,
+    },
+  })
 
-    return Response.json(data)
-  } catch (err: any) {
-    return Response.json(
-      { error: "Internal error", message: err?.message },
-      { status: 500 }
-    )
-  }
+  const json = await res.json().catch(() => ({}))
+  return Response.json(json, { status: res.status })
 }

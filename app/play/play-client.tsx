@@ -1,268 +1,329 @@
-// app/play/play-client.tsx
 "use client"
 
+import Image from "next/image"
 import { useEffect, useMemo, useRef, useState } from "react"
-import "./play-client.css"
 
-type Game = {
+type ProviderGame = {
   id?: string
+  code?: string
+  gameCode?: string
   name?: string
   kind?: string
-  assets?: {
-    cover?: string
-    background?: string
-    symbols?: string[]
-  }
+  assets?: { cover?: string; background?: string; symbols?: string[] }
 }
 
-type PlayResult = {
+type SpinResult = {
   sessionId?: string
   gameCode?: string
   bet?: number
   win?: number
   balance?: number | { balance?: number }
-  currency?: string
-  result?: { symbols?: string[] | string[][] }
+  result?: { symbols?: string[] }
+  symbols?: string[]
 }
 
-function clampNumber(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
+function safeNumber(v: unknown, fallback = 0) {
+  const n = typeof v === "number" ? v : Number(v)
+  return Number.isFinite(n) ? n : fallback
 }
 
-function resolveAssetUrl(pathOrUrl: string | undefined) {
-  if (!pathOrUrl) return ""
-  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl
-  return `/api/assets?path=${encodeURIComponent(pathOrUrl)}`
+function pick<T>(arr: T[]) {
+  return arr[Math.floor(Math.random() * arr.length)]
 }
 
-function randomGridFromPool(pool: string[], cols = 5, rows = 3): string[][] {
-  const safe = pool?.length ? pool : []
-  const pick = () => (safe.length ? safe[Math.floor(Math.random() * safe.length)] : "")
-  return Array.from({ length: cols }, () => Array.from({ length: rows }, pick))
-}
-
-function normalizeSymbolsToGrid(
-  symbols: string[] | string[][] | undefined,
-  fallbackPool: string[],
-  cols = 5,
-  rows = 3
-): string[][] {
-  if (Array.isArray(symbols) && Array.isArray(symbols[0])) {
-    const s2d = symbols as string[][]
-    const grid = Array.from({ length: cols }, () => Array(rows).fill(""))
-    for (let c = 0; c < cols; c++) {
-      for (let r = 0; r < rows; r++) {
-        grid[c][r] = s2d?.[c]?.[r] || fallbackPool[(c * rows + r) % Math.max(1, fallbackPool.length)] || ""
-      }
-    }
-    return grid
-  }
-  const flat = (symbols as string[] | undefined) ?? []
-  const grid = Array.from({ length: cols }, () => Array(rows).fill(""))
-  const total = cols * rows
-  for (let i = 0; i < total; i++) {
-    const c = i % cols
-    const r = Math.floor(i / cols)
-    grid[c][r] = flat[i] || fallbackPool[i % Math.max(1, fallbackPool.length)] || ""
-  }
-  return grid
+function makeGrid(symbols: string[], cols = 5, rows = 3) {
+  const out: string[] = []
+  if (!symbols.length) return out
+  for (let i = 0; i < cols * rows; i++) out.push(pick(symbols))
+  return out
 }
 
 export default function PlayClient({
   sessionId,
-  initialGameCode
+  gameCode,
 }: {
   sessionId: string
-  initialGameCode: string
+  gameCode: string
 }) {
+  const [games, setGames] = useState<ProviderGame[]>([])
   const [loading, setLoading] = useState(true)
+
+  const [bet, setBet] = useState(1)
+  const [win, setWin] = useState(0)
+  const [balance, setBalance] = useState(0)
+
   const [spinning, setSpinning] = useState(false)
+  const [flashWin, setFlashWin] = useState(false)
 
-  const [game, setGame] = useState<Game | null>(null)
-  const [gameCode, setGameCode] = useState<string>(initialGameCode || "")
+  const [grid, setGrid] = useState<string[]>([])
+  const [symbolsCatalog, setSymbolsCatalog] = useState<string[]>([])
+  const flashTimer = useRef<number | null>(null)
 
-  const [bet, setBet] = useState<number>(1)
-  const [win, setWin] = useState<number>(0)
-  const [balance, setBalance] = useState<number>(0)
-  const [currency, setCurrency] = useState<string>("BRL")
-
-  const [grid, setGrid] = useState<string[][]>(() => Array.from({ length: 5 }, () => Array(3).fill("")))
-  const symbolPool = useMemo(() => (game?.assets?.symbols ?? []).filter(Boolean), [game])
-  const bgUrl = useMemo(() => resolveAssetUrl(game?.assets?.background), [game])
-
-  const spinLock = useRef(false)
-
+  // ✅ charge le catalog depuis notre server (déjà headers côté server)
   useEffect(() => {
-    if (!sessionId) {
-      window.location.href = "/"
-      return
-    }
-
-    let alive = true
+    let cancelled = false
     ;(async () => {
-      try {
-        setLoading(true)
-        const res = await fetch("/api/games", { cache: "no-store" })
-        if (!res.ok) throw new Error("Failed to load games")
-        const games = (await res.json()) as Game[]
-        const found = (gameCode && games.find(g => (g.id || "") === gameCode)) || null
-        if (!alive) return
+      setLoading(true)
+      const res = await fetch("/api/games", { cache: "no-store" })
+      const json = await res.json().catch(() => [])
+      if (cancelled) return
 
-        setGame(found)
-        if (found?.id) setGameCode(found.id)
-
-        const pool = (found?.assets?.symbols ?? []).filter(Boolean)
-        setGrid(randomGridFromPool(pool, 5, 3))
-
-        pool.slice(0, 60).forEach(p => {
-          const img = new Image()
-          img.src = resolveAssetUrl(p)
-        })
-      } catch {
-        // keep UI alive even if catalog fails
-      } finally {
-        if (alive) setLoading(false)
-      }
+      const list: ProviderGame[] = Array.isArray(json) ? json : Array.isArray(json?.games) ? json.games : []
+      setGames(list)
+      setLoading(false)
     })()
-
     return () => {
-      alive = false
+      cancelled = true
+      if (flashTimer.current) window.clearTimeout(flashTimer.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  }, [])
 
-  const title = game?.name ? `ZENYX • ${game.name}` : "ZENYX • JOUER"
+  const game = useMemo(() => {
+    if (!gameCode) return undefined
+    const found = games.find((g) => (g.id ?? g.code ?? g.gameCode) === gameCode)
+    return found
+  }, [games, gameCode])
 
-  function betMinus() {
-    setBet(b => clampNumber(b - 1, 1, 1000))
-  }
-  function betPlus() {
-    setBet(b => clampNumber(b + 1, 1, 1000))
-  }
+  const backgroundPath = game?.assets?.background ?? ""
+  const symbols = game?.assets?.symbols ?? []
+
+  // ✅ preload + grille initiale dès ouverture
+  useEffect(() => {
+    if (!symbols?.length) return
+    setSymbolsCatalog(symbols)
+
+    // Preload images via proxy same-origin pour éviter NotSameOrigin
+    for (const p of symbols) {
+      const img = new window.Image()
+      img.src = `/api/assets?path=${encodeURIComponent(p)}`
+    }
+
+    // Grille initiale immédiate (plus de "...")
+    setGrid(makeGrid(symbols, 5, 3))
+  }, [symbols?.length])
+
+  const title = game?.name ?? (gameCode || "ZENYX • PLAY")
+  const kind = game?.kind ?? "SLOT"
 
   async function doSpin() {
-    if (!sessionId) return
-    if (spinLock.current) return
+    if (!sessionId || spinning) return
+    setSpinning(true)
+
     try {
-      spinLock.current = true
-      setSpinning(true)
-      setWin(0)
-
-      if (symbolPool.length) setGrid(randomGridFromPool(symbolPool, 5, 3))
-
       const res = await fetch("/api/play", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, bet })
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, bet }),
       })
 
-      const data = (await res.json()) as PlayResult
-      if (!res.ok) {
-        setSpinning(false)
-        return
+      const json: SpinResult = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error("Spin failed")
+
+      const nextWin = safeNumber(json.win, 0)
+
+      // ✅ balance peut être number OU objet
+      const bal =
+        typeof json.balance === "number"
+          ? json.balance
+          : safeNumber((json.balance as any)?.balance, balance)
+
+      setWin(nextWin)
+      setBalance(bal)
+
+      // ✅ provider peut renvoyer result.symbols OU symbols direct
+      const nextSymbols =
+        (Array.isArray(json.result?.symbols) ? json.result?.symbols : null) ??
+        (Array.isArray(json.symbols) ? json.symbols : null)
+
+      if (nextSymbols?.length) {
+        setGrid(nextSymbols.slice(0, 15))
+      } else if (symbolsCatalog.length) {
+        setGrid(makeGrid(symbolsCatalog, 5, 3))
       }
 
-      const nextWin = typeof data.win === "number" ? data.win : 0
-      const nextCurrency = typeof data.currency === "string" ? data.currency : currency
-
-      let nextBalance = balance
-      if (typeof data.balance === "number") nextBalance = data.balance
-      else if (data.balance && typeof data.balance === "object") {
-        const b = (data.balance as { balance?: number }).balance
-        if (typeof b === "number") nextBalance = b
+      if (nextWin > 0) {
+        setFlashWin(true)
+        if (flashTimer.current) window.clearTimeout(flashTimer.current)
+        flashTimer.current = window.setTimeout(() => setFlashWin(false), 800)
       }
-
-      const nextGrid = normalizeSymbolsToGrid(data?.result?.symbols, symbolPool, 5, 3)
-
-      setTimeout(() => {
-        setGrid(nextGrid)
-        setWin(nextWin)
-        setBalance(nextBalance)
-        setCurrency(nextCurrency)
-        setSpinning(false)
-      }, 260)
+    } catch {
+      // fallback visuel si erreur
+      if (symbolsCatalog.length) setGrid(makeGrid(symbolsCatalog, 5, 3))
     } finally {
-      setTimeout(() => {
-        spinLock.current = false
-      }, 260)
+      setSpinning(false)
     }
   }
 
-  return (
-    <div className="playRoot">
-      <div className="bg" style={{ backgroundImage: bgUrl ? `url("${bgUrl}")` : undefined }} />
-      <div className="overlay" />
+  const bgUrl = backgroundPath
+    ? `/api/assets?path=${encodeURIComponent(backgroundPath)}`
+    : ""
 
-      <header className="topBar">
-        <div className="left">
-          <div className="brand">{title}</div>
-          <div className="sub">
-            Session : <span className="mono">{sessionId}</span>
+  return (
+    <main className="min-h-screen bg-[#070A12] text-white">
+      {/* Background */}
+      {bgUrl ? (
+        <div className="pointer-events-none fixed inset-0">
+          <Image
+            src={bgUrl}
+            alt=""
+            fill
+            priority={false}
+            className="object-cover opacity-35 blur-[0.5px]"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/40 to-black/85" />
+        </div>
+      ) : (
+        <div className="pointer-events-none fixed inset-0 bg-gradient-to-b from-black via-[#070A12] to-black" />
+      )}
+
+      {/* Top bar */}
+      <div className="relative mx-auto max-w-6xl px-4 pt-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs text-white/60">ZENYX</div>
+            <div className="text-xl font-semibold tracking-tight">{title}</div>
+            <div className="text-xs text-white/60">
+              {kind} • Session: <span className="text-white/80">{sessionId || "—"}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <a
+              href="/"
+              className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/90 hover:bg-white/10"
+            >
+              ← Lobby
+            </a>
+
+            <button
+              onClick={doSpin}
+              disabled={!sessionId || spinning}
+              className="rounded-full bg-[#7C3AED] px-5 py-2 text-sm font-semibold shadow-[0_16px_40px_rgba(124,58,237,.35)] disabled:opacity-50"
+            >
+              {spinning ? "SPIN…" : "SPIN"}
+            </button>
           </div>
         </div>
+      </div>
 
-        <div className="right">
-          <button className="ghostBtn" onClick={() => (window.location.href = "/")} type="button">
-            ← Hall d’entrée
-          </button>
-        </div>
-      </header>
-
-      <main className="stage">
-        <div className="reelFrame">
-          <div className={`reels ${spinning ? "spinning" : ""}`}>
-            {Array.from({ length: 5 }).map((_, col) => (
-              <div className="reelCol" key={col}>
-                {Array.from({ length: 3 }).map((__, row) => {
-                  const path = grid?.[col]?.[row] || ""
-                  const src = resolveAssetUrl(path)
+      {/* Game frame (style iframe pro) */}
+      <div className="relative mx-auto max-w-6xl px-4 pb-28 pt-4">
+        <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/30 shadow-[0_30px_90px_rgba(0,0,0,.55)]">
+          <div className="p-4 sm:p-5">
+            {/* Reels grid */}
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
+              <div className="grid grid-cols-5 gap-2 sm:gap-3">
+                {(grid.length ? grid : Array.from({ length: 15 }).map(() => "")).map((p, i) => {
+                  const src = p ? `/api/assets?path=${encodeURIComponent(p)}` : ""
                   return (
-                    <div className="cell" key={`${col}-${row}`}>
-                      {src ? <img className="sym" src={src} alt="symbol" draggable={false} /> : <div className="symPlaceholder" />}
+                    <div
+                      key={i}
+                      className={`relative aspect-[1/1] overflow-hidden rounded-xl border border-white/10 bg-black/30 ${
+                        flashWin ? "ring-2 ring-[#F59E0B] shadow-[0_0_35px_rgba(245,158,11,.25)]" : ""
+                      }`}
+                    >
+                      {src ? (
+                        <Image
+                          src={src}
+                          alt=""
+                          fill
+                          sizes="20vw"
+                          className="object-contain p-2"
+                          priority={false}
+                        />
+                      ) : (
+                        <div className="absolute inset-0 grid place-items-center text-white/20">•</div>
+                      )}
                     </div>
                   )
                 })}
               </div>
-            ))}
+            </div>
           </div>
-          <div className={`winGlow ${win > 0 ? "on" : ""}`} />
         </div>
-      </main>
+      </div>
 
-      {/* MOBILE-FIRST footer: 2 rows, SPIN centered, never cut */}
-      <footer className="footer">
-        <div className="footerGrid">
-          <div className="panel">
-            <div className="label">PARI</div>
-            <div className="value">{bet}</div>
-            <div className="betControls">
-              <button className="mini" onClick={betMinus} type="button" aria-label="Minus">
-                −
-              </button>
-              <button className="mini" onClick={betPlus} type="button" aria-label="Plus">
-                +
+      {/* Sticky footer (comme ton exemple pro) */}
+      <footer className="fixed bottom-0 left-0 right-0 z-50">
+        <div className="mx-auto max-w-6xl px-4 pb-4">
+          <div className="rounded-3xl border border-white/10 bg-black/55 p-3 backdrop-blur-xl shadow-[0_25px_80px_rgba(0,0,0,.65)]">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              {/* BET */}
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                <div className="text-[11px] font-semibold text-white/60">BET</div>
+                <div className="mt-1 text-lg font-semibold">{bet}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[1, 2, 5, 10].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setBet(v)}
+                      className={`h-8 rounded-full px-3 text-sm font-semibold transition ${
+                        bet === v ? "bg-[#7C3AED]" : "bg-white/10 hover:bg-white/15"
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* WIN */}
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                <div className="text-[11px] font-semibold text-white/60">WIN</div>
+                <div className={`mt-1 text-lg font-semibold ${flashWin ? "text-[#F59E0B]" : ""}`}>
+                  {win}
+                </div>
+                <div className="mt-2 text-xs text-white/60">Dernier gain</div>
+              </div>
+
+              {/* BALANCE */}
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                <div className="text-[11px] font-semibold text-white/60">SOLDE</div>
+                <div className="mt-1 text-lg font-semibold">
+                  {balance} <span className="text-sm text-white/60">BRL</span>
+                </div>
+                <div className="mt-2 text-xs text-white/60">Balance joueur</div>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <button
+                onClick={doSpin}
+                disabled={!sessionId || spinning}
+                className="w-full rounded-2xl bg-[#7C3AED] py-3 text-base font-semibold shadow-[0_18px_60px_rgba(124,58,237,.35)] disabled:opacity-50"
+              >
+                {spinning ? "SPIN…" : "SPIN"}
               </button>
             </div>
           </div>
-
-          <div className="panel">
-            <div className="label">GAGNER</div>
-            <div className={`value ${win > 0 ? "win" : ""}`}>{win}</div>
-          </div>
-
-          <div className="panel">
-            <div className="label">ÉQUILIBRE</div>
-            <div className="value">
-              {balance} <span className="cur">{currency}</span>
-            </div>
-          </div>
-
-          <button className={`spinBtn ${spinning ? "busy" : ""}`} onClick={doSpin} disabled={spinning || loading} type="button">
-            <div className="spinRing" />
-            <div className="spinText">{spinning ? "..." : "SPIN"}</div>
-          </button>
         </div>
       </footer>
-    </div>
+
+      {/* Simple states */}
+      {loading ? (
+        <div className="pointer-events-none fixed inset-x-0 top-16 z-40 mx-auto max-w-6xl px-4">
+          <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-2 text-sm text-white/70 backdrop-blur">
+            Chargement…
+          </div>
+        </div>
+      ) : null}
+
+      {!sessionId ? (
+        <div className="pointer-events-none fixed inset-0 z-40 grid place-items-center px-4">
+          <div className="max-w-md rounded-3xl border border-white/10 bg-black/65 p-6 text-center backdrop-blur-xl">
+            <div className="text-lg font-semibold">Session manquante</div>
+            <div className="mt-2 text-sm text-white/70">
+              Ouvre un jeu depuis le lobby (ou via le launchUrl du provider).
+            </div>
+            <a
+              href="/"
+              className="pointer-events-auto mt-4 inline-flex rounded-full bg-white/10 px-5 py-2 text-sm font-semibold hover:bg-white/15"
+            >
+              Retour Lobby
+            </a>
+          </div>
+        </div>
+      ) : null}
+    </main>
   )
 }

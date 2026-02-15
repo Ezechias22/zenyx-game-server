@@ -1,150 +1,124 @@
-export const runtime = "nodejs"
+import Link from "next/link"
+
 export const dynamic = "force-dynamic"
 
 type Game = {
   id: string
   name: string
   kind: string
-  rtp?: number
-  volatility?: string
-  ui?: { aspectRatio?: string; width?: number; height?: number }
-  assets?: { cover?: string; background?: string; symbols?: string[] }
+  rtp: number
+  assets: {
+    cover: string
+  }
 }
 
 async function getGames(): Promise<Game[]> {
-  const base = (process.env.PROVIDER_BASE_URL || "").replace(/\/+$/, "")
-  const res = await fetch(`${base}/v1/public/games`, {
+  const PROVIDER_BASE_URL = process.env.PROVIDER_BASE_URL!
+  const PUBLIC_TOKEN = process.env.PUBLIC_TOKEN!
+  const OPERATOR_KEY = process.env.OPERATOR_KEY!
+
+  const res = await fetch(`${PROVIDER_BASE_URL}/v1/public/games`, {
+    cache: "no-store",
     headers: {
-      "x-public-token": process.env.PUBLIC_TOKEN!,
-      "x-operator-key": process.env.OPERATOR_KEY!
+      "x-public-token": PUBLIC_TOKEN,
+      "x-operator-key": OPERATOR_KEY,
     },
-    cache: "no-store"
   })
 
-  if (!res.ok) return []
-  const data = await res.json().catch(() => null)
-  return Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
+  if (!res.ok) {
+    throw new Error("Failed to load games")
+  }
+
+  return res.json()
 }
 
 export default async function LobbyPage() {
+  const PROVIDER_BASE_URL = process.env.PROVIDER_BASE_URL!
   const games = await getGames()
-  const appName = process.env.NEXT_PUBLIC_APP_NAME || "ZENYX Casino"
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background:
-          "radial-gradient(1200px 700px at 20% 0%, rgba(124,58,237,0.18), transparent 60%), #0b0f1a",
-        color: "#fff",
-        padding: 28
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontWeight: 950, fontSize: 30 }}>🎰 {appName}</div>
-          <div style={{ opacity: 0.7, marginTop: 6, fontSize: 13 }}>
-            Lobby production • covers proxifiés (same-origin)
-          </div>
-        </div>
-      </div>
+    <main style={styles.page}>
+      <h1 style={styles.title}>🎰 ZENYX CASINO</h1>
 
-      <div
-        style={{
-          marginTop: 22,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: 16
-        }}
-      >
-        {games.map((g) => {
-          const coverPath = g.assets?.cover || ""
-          const coverSrc = coverPath ? `/api/assets?path=${encodeURIComponent(coverPath)}` : ""
+      <div style={styles.grid}>
+        {games.map((game) => (
+          <Link
+            key={game.id}
+            href={`/play?gameCode=${game.id}`}
+            style={styles.card}
+          >
+            <img
+              src={`${PROVIDER_BASE_URL}${game.assets.cover}`}
+              alt={game.name}
+              style={styles.cover}
+            />
 
-          const symbols = Array.isArray(g.assets?.symbols) ? g.assets!.symbols! : []
-          const rtpPct =
-            typeof g.rtp === "number" && Number.isFinite(g.rtp) ? `${Math.round(g.rtp * 100)}%` : "—"
-
-          return (
-            <a
-              key={g.id}
-              href={`/api/create-session?gameCode=${encodeURIComponent(g.id)}`}
-              style={{
-                display: "block",
-                textDecoration: "none",
-                color: "#fff",
-                background: "rgba(17,24,39,0.85)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 16,
-                overflow: "hidden",
-                boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
-                transform: "translateZ(0)"
-              }}
-            >
-              {/* ✅ Preload symbols (same-origin proxy) */}
-              {symbols.slice(0, 24).map((p) => (
-                <link
-                  key={p}
-                  rel="preload"
-                  as="image"
-                  href={`/api/assets?path=${encodeURIComponent(p)}`}
-                />
-              ))}
-
-              <div style={{ position: "relative" }}>
-                {coverSrc ? (
-                  <img
-                    src={coverSrc}
-                    alt={g.name}
-                    style={{
-                      width: "100%",
-                      height: 180,
-                      objectFit: "cover",
-                      display: "block"
-                    }}
-                    loading="lazy"
-                    decoding="async"
-                  />
-                ) : (
-                  <div style={{ height: 180, background: "rgba(255,255,255,0.04)" }} />
-                )}
-
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    background:
-                      "linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.78) 100%)"
-                  }}
-                />
-              </div>
-
-              <div style={{ padding: 14 }}>
-                <div style={{ fontWeight: 900, fontSize: 16 }}>{g.name}</div>
-                <div style={{ opacity: 0.72, fontSize: 13, marginTop: 6 }}>
-                  {g.kind} • RTP {rtpPct}
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 12,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "10px 12px",
-                    borderRadius: 12,
-                    background: "#7c3aed",
-                    fontWeight: 900,
-                    fontSize: 13
-                  }}
-                >
-                  Play →
-                </div>
-              </div>
-            </a>
-          )
-        })}
+            <div style={styles.info}>
+              <h3 style={styles.name}>{game.name}</h3>
+              <p style={styles.meta}>
+                {game.kind} • RTP {game.rtp}
+              </p>
+            </div>
+          </Link>
+        ))}
       </div>
     </main>
   )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: "100vh",
+    padding: "40px 20px",
+    background: "linear-gradient(180deg,#0b0f1c,#0e1428)",
+    color: "white",
+    fontFamily: "system-ui, sans-serif",
+  },
+
+  title: {
+    textAlign: "center",
+    marginBottom: "40px",
+    fontSize: "28px",
+    fontWeight: 700,
+  },
+
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+    gap: "24px",
+    maxWidth: "1200px",
+    margin: "0 auto",
+  },
+
+  card: {
+    textDecoration: "none",
+    background: "#121a33",
+    borderRadius: "16px",
+    overflow: "hidden",
+    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+  },
+
+  cover: {
+    width: "100%",
+    aspectRatio: "1/1",
+    objectFit: "cover",
+    display: "block",
+  },
+
+  info: {
+    padding: "14px",
+  },
+
+  name: {
+    margin: 0,
+    fontSize: "16px",
+    fontWeight: 600,
+  },
+
+  meta: {
+    margin: "6px 0 0 0",
+    fontSize: "13px",
+    opacity: 0.7,
+  },
 }
