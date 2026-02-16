@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import SpinPanel from '@/components/SpinPanel'
 import ProviderLaunchFrame from '@/components/ProviderLaunchFrame'
-import SlotGrid, { SoundEvent } from '@/components/SlotGrid'
+import SlotGrid from '@/components/SlotGrid'
 import { PAYLINES_20 } from '@/constants/paylines'
 import { normalizePlayResponse } from '@/lib/normalize'
 
@@ -23,18 +23,16 @@ function empty5x3(): string[][] {
   return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => 'A'))
 }
 
-// ✅ accept both shapes: 5x3 (reel x row) OR 3x5 (row x reel)
 function to5x3(raw: any): string[][] | null {
   if (!Array.isArray(raw)) return null
 
   // 5x3
-  if (raw.length === 5 && raw.every((c: any) => Array.isArray(c) && c.length === 3)) {
-    if (raw.every((c: any) => c.every((x: any) => typeof x === 'string'))) return raw
+  if (raw.length === 5 && raw.every((c: any) => Array.isArray(c) && c.length === 3 && c.every((x: any) => typeof x === 'string'))) {
+    return raw
   }
 
-  // 3x5 -> transpose to 5x3
-  if (raw.length === 3 && raw.every((r: any) => Array.isArray(r) && r.length === 5)) {
-    if (!raw.every((r: any) => r.every((x: any) => typeof x === 'string'))) return null
+  // 3x5 -> transpose
+  if (raw.length === 3 && raw.every((r: any) => Array.isArray(r) && r.length === 5 && r.every((x: any) => typeof x === 'string'))) {
     const out = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
     for (let row = 0; row < 3; row++) for (let reel = 0; reel < 5; reel++) out[reel][row] = raw[row][reel]
     return out
@@ -43,7 +41,7 @@ function to5x3(raw: any): string[][] | null {
   return null
 }
 
-// ✅ basic UI-side win lines detection (wild=W, scatter=S)
+// UI-side win lines detection (wild=W, scatter=S)
 function detectWinningLines(grid5x3: string[][]): number[] {
   const wins: number[] = []
   const WILD = 'W'
@@ -52,8 +50,9 @@ function detectWinningLines(grid5x3: string[][]): number[] {
   for (let i = 0; i < PAYLINES_20.length; i++) {
     const line = PAYLINES_20[i]
     const seq = line.map((row, reel) => grid5x3?.[reel]?.[row] ?? '')
-    let base = ''
 
+    // base symbol: first non-wild, non-scatter from left
+    let base = ''
     for (let r = 0; r < seq.length; r++) {
       const s = seq[r]
       if (!s || s === SCATTER) break
@@ -73,6 +72,7 @@ function detectWinningLines(grid5x3: string[][]): number[] {
     }
     if (count >= 3) wins.push(i)
   }
+
   return wins
 }
 
@@ -99,20 +99,12 @@ export default function PlayClient() {
   const [spinning, setSpinning] = useState(false)
   const inFlightRef = useRef(false)
 
-  const [selectedLine, setSelectedLine] = useState(0)
-  const [showAllLines, setShowAllLines] = useState(false)
   const [winningLines, setWinningLines] = useState<number[]>([])
 
   const PROVIDER_BASE_URL = useMemo(() => {
     return process.env.NEXT_PUBLIC_PROVIDER_BASE_URL || 'https://zenyx-games-provider-production.up.railway.app'
   }, [])
 
-  const onSound = (e: SoundEvent) => {
-    // TODO: you plug your audio here (spin/stop/win/lineChange/click)
-    // console.log('SOUND', e)
-  }
-
-  // ✅ session init
   useEffect(() => {
     if (!gameId) {
       setError('Missing gameId')
@@ -159,20 +151,6 @@ export default function PlayClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameId])
 
-  // ✅ auto-cycle winning lines only
-  useEffect(() => {
-    if (winningLines.length <= 1) return
-    let i = 0
-    const t = setInterval(() => {
-      setShowAllLines(false)
-      setSelectedLine(winningLines[i])
-      onSound({ type: 'lineChange', lineIndex: winningLines[i] })
-      i = (i + 1) % winningLines.length
-    }, 900)
-    return () => clearInterval(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [winningLines])
-
   async function onSpin() {
     if (!sessionId || !gameId) return
     if (inFlightRef.current) return
@@ -182,10 +160,6 @@ export default function PlayClient() {
     setError('')
     setWin(0)
     setWinningLines([])
-    setShowAllLines(false)
-
-    // rotate line each spin (if no wins it'll stay)
-    setSelectedLine((prev) => (prev + 1) % PAYLINES_20.length)
 
     try {
       const res = await fetch('/api/play', {
@@ -196,26 +170,17 @@ export default function PlayClient() {
       const raw = await res.json()
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // wallet
       if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal((raw.balance as Wallet).balance))
       }
 
-      // ✅ grid robust
       const g = to5x3(raw?.result?.grid)
       if (g) {
         setProviderGrid(g)
-        const wins = detectWinningLines(g)
-        setWinningLines(wins)
-        if (wins.length) {
-          setSelectedLine(wins[0])
-          onSound({ type: 'win' })
-          onSound({ type: 'lineChange', lineIndex: wins[0] })
-        }
+        setWinningLines(detectWinningLines(g))
       }
 
-      // win from provider normalized
       const normalized = normalizePlayResponse(raw, { gameId, providerBaseUrl: PROVIDER_BASE_URL })
       setWin(normalized.win)
     } catch (e: any) {
@@ -229,7 +194,7 @@ export default function PlayClient() {
   }
 
   return (
-    <div className="pb-28">
+    <div className="pb-32">
       {error ? (
         <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
           {error}
@@ -258,12 +223,7 @@ export default function PlayClient() {
         providerBase={PROVIDER_BASE_URL}
         grid={providerGrid}
         spinning={spinning}
-        selectedLine={selectedLine}
-        setSelectedLine={setSelectedLine}
-        showAllLines={showAllLines}
-        setShowAllLines={setShowAllLines}
         winningLines={winningLines}
-        onSound={onSound}
       />
 
       <SpinPanel
