@@ -11,11 +11,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -p %PORT%",
-    "lint": "next lint",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
+  "start": "cross-env-shell \"next start -p ${PORT:-3000}\""
+},
+"dependencies": {
     "next": "14.1.0",
     "react": "18.2.0",
     "react-dom": "18.2.0"
