@@ -20,18 +20,6 @@ function ensureAbsolute(base: string, path: string): string {
   return `${base}/${p}`
 }
 
-function normalizeSymbolsFromCatalog(base: string, rawGame: any): SymbolAsset[] {
-  const arr = rawGame?.assets?.symbols ?? []
-  if (!Array.isArray(arr)) return []
-  const out: SymbolAsset[] = []
-  for (let i = 0; i < arr.length; i++) {
-    const v = arr[i]
-    if (typeof v === 'string' && v.trim()) out.push({ id: `sym_${i}`, src: ensureAbsolute(base, v) })
-  }
-  const seen = new Set<string>()
-  return out.filter(s => (seen.has(s.src) ? false : (seen.add(s.src), true)))
-}
-
 function parseDecimal(v: any): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v
   if (typeof v === 'string') {
@@ -41,9 +29,20 @@ function parseDecimal(v: any): number {
   return 0
 }
 
-/**
- * ✅ Catalog -> games list
- */
+function normalizeSymbolsFromCatalog(base: string, rawGame: any): SymbolAsset[] {
+  const arr = rawGame?.assets?.symbols ?? []
+  if (!Array.isArray(arr)) return []
+  const out: SymbolAsset[] = []
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i]
+    if (typeof v === 'string' && v.trim()) {
+      out.push({ id: `sym_${i}`, src: ensureAbsolute(base, v) })
+    }
+  }
+  const seen = new Set<string>()
+  return out.filter(s => (seen.has(s.src) ? false : (seen.add(s.src), true)))
+}
+
 export function normalizeGamesResponse(data: any, providerBaseUrl: string): Game[] {
   const list = Array.isArray(data) ? data : Array.isArray(data?.games) ? data.games : []
   const base = providerBaseUrl.replace(/\/$/, '')
@@ -53,21 +52,17 @@ export function normalizeGamesResponse(data: any, providerBaseUrl: string): Game
     if (!g || typeof g !== 'object') continue
     const gameId = pick(g, ['id', 'gameCode', 'code', 'slug'])
     if (!gameId) continue
-    const name = pick(g, ['name', 'title', 'label']) ?? gameId
 
+    const name = pick(g, ['name', 'title', 'label']) ?? gameId
     const coverPath = pick(g?.assets, ['cover']) ?? ''
     const cover = coverPath ? ensureAbsolute(base, coverPath) : ''
-
     const symbols = normalizeSymbolsFromCatalog(base, g)
+
     games.push({ id: gameId, name, cover, symbols })
   }
-
   return games
 }
 
-/**
- * ✅ Session -> launch url
- */
 export function normalizeSessionResponse(
   data: any,
   providerBaseUrl: string
@@ -84,26 +79,24 @@ export function normalizeSessionResponse(
 }
 
 /**
- * ✅ Provider grid could be:
+ * Provider grid can be either:
  * - 3x5 (rows x cols)
- * - 5x3 (reels x rows) => grid[reelIndex][rowIndex]
+ * - 5x3 (reels x rows)  => grid[reelIndex][rowIndex]
  *
- * We normalize to: 3 rows x 5 cols for UI.
+ * We normalize to UI 3 rows x 5 cols.
  */
-function normalizeGridTo3x5(rawGrid: any): string[][] {
-  if (!Array.isArray(rawGrid) || !Array.isArray(rawGrid[0])) {
-    throw new Error('Invalid grid')
-  }
+function gridTo3x5Keys(rawGrid: any): string[][] {
+  if (!Array.isArray(rawGrid) || !Array.isArray(rawGrid[0])) throw new Error('Invalid grid')
 
   const rows = rawGrid.length
   const cols = rawGrid[0].length
 
-  // case A: already 3x5
+  // already 3x5
   if (rows === 3 && cols === 5) {
     return rawGrid.map((r: any[]) => r.map((x: any) => asString(x) ?? ''))
   }
 
-  // case B: provider is 5 reels x 3 rows (grid[reel][row])
+  // provider 5 reels x 3 rows
   if (rows === 5 && cols === 3) {
     const out: string[][] = Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => ''))
     for (let reel = 0; reel < 5; reel++) {
@@ -117,37 +110,27 @@ function normalizeGridTo3x5(rawGrid: any): string[][] {
   throw new Error(`Unsupported grid shape (${rows}x${cols})`)
 }
 
-/**
- * ✅ SLOT renderer mapping:
- * img = `${PROVIDER_BASE_URL}/assets/${gameId}/symbols/${symbol}.png`
- * We do NOT treat cell as URL.
- */
 export function normalizePlayResponse(
   data: any,
   opts: { gameId: string; providerBaseUrl: string }
 ): PlayResult {
   const { gameId, providerBaseUrl } = opts
-
   const result = data?.result
   if (!result) throw new Error('Invalid play response: missing result')
 
-  const rawGrid = result.grid
-  const gridKeys = normalizeGridTo3x5(rawGrid)
-
+  const keys = gridTo3x5Keys(result.grid)
   const base = providerBaseUrl.replace(/\/$/, '')
 
-  const grid: SymbolAsset[][] = gridKeys.map((row, r) =>
+  const grid: SymbolAsset[][] = keys.map((row, r) =>
     row.map((symbol, c) => {
-      const key = symbol.trim()
-      if (!key) return { id: `EMPTY_${r}_${c}`, src: '' }
-
-      // ✅ exact mapping (A,K,Q,J,10,9,EG1,EG2,W,S...)
-      const src = `${base}/assets/${gameId}/symbols/${encodeURIComponent(key)}.png`
-      return { id: `${key}_${r}_${c}`, src }
+      const key = (symbol ?? '').trim()
+      // ALWAYS create a cell (no undefined)
+      const id = key ? `${key}_${r}_${c}` : `EMPTY_${r}_${c}`
+      const src = key ? `${base}/assets/${gameId}/symbols/${encodeURIComponent(key)}.png` : ''
+      return { id, src }
     })
   )
 
-  // ✅ wallet/balance object: data.balance.balance
   const balance = parseDecimal(data?.balance?.balance ?? data?.wallet?.balance ?? data?.balance ?? 0)
   const win = parseDecimal(result?.win ?? data?.win ?? 0)
 
