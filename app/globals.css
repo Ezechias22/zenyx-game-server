@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #05060a;
+  font-feature-settings: "ss01" 1, "ss02" 1;
+}
+
+* { box-sizing: border-box; }
+
+.no-tap-highlight {
+  -webkit-tap-highlight-color: transparent;
+}
