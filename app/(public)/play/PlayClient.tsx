@@ -59,8 +59,6 @@ export default function PlayClient() {
   const [grid, setGrid] = useState<SymbolAsset[][]>(() => emptyGrid())
 
   const [wallet, setWallet] = useState<Wallet | null>(null)
-
-  // ✅ This is the number SpinPanel needs
   const [balanceNumber, setBalanceNumber] = useState<number>(0)
 
   const [win, setWin] = useState<number>(0)
@@ -77,7 +75,7 @@ export default function PlayClient() {
     )
   }, [])
 
-  // ✅ Create session (only if missing sessionId from URL)
+  // ✅ Create session if missing sessionId in URL
   useEffect(() => {
     if (!gameId) {
       setError('Missing gameId')
@@ -102,14 +100,13 @@ export default function PlayClient() {
             currency: 'BRL'
           })
         })
+
         const json = await res.json()
         if (!res.ok) throw new Error(json?.error || 'Session error')
 
         if (!alive) return
         setSessionId(json.sessionId)
         setLaunchUrl(typeof json.launchUrl === 'string' ? json.launchUrl : '')
-
-        // session API returns numeric balance (normalized)
         setBalanceNumber(parseDecimal(json.balance))
 
         const next = new URLSearchParams(params.toString())
@@ -143,15 +140,19 @@ export default function PlayClient() {
       })
 
       const raw = await res.json()
+
+      // 🔍 DEBUG GRID SHAPE + CONTENT
+      console.log('PLAY RAW RESPONSE:', raw)
+      console.log('GRID RAW:', raw?.result?.grid)
+
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // ✅ Provider returns balance object: raw.balance.balance
+      // ✅ Provider wallet object: raw.balance.balance
       if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
-        setBalanceNumber(parseDecimal(raw.balance.balance))
+        setBalanceNumber(parseDecimal((raw.balance as Wallet).balance))
       }
 
-      // ✅ Normalize grid + win (normalize also reads balance but we trust wallet)
       const normalized = normalizePlayResponse(raw, {
         gameId,
         providerBaseUrl: PROVIDER_BASE_URL
@@ -197,7 +198,6 @@ export default function PlayClient() {
 
       <ReelGrid grid={grid} spinning={spinning} />
 
-      {/* ✅ SpinPanel expects number */}
       <SpinPanel
         balance={balanceNumber}
         win={win}

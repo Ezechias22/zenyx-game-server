@@ -1,30 +1,29 @@
 {
   "pages": {
     "/_not-found": [
-      "static/chunks/webpack-b3301d2551ded499.js",
+      "static/chunks/webpack-690af541367f50f5.js",
       "static/chunks/fd9d1056-9e625e8be9cf6216.js",
       "static/chunks/69-cceabd1c6ad33c86.js",
       "static/chunks/main-app-f7904b694d7af042.js",
       "static/chunks/app/_not-found-ad7b9e5f1ae9ab8e.js"
     ],
     "/layout": [
-      "static/chunks/webpack-b3301d2551ded499.js",
+      "static/chunks/webpack-690af541367f50f5.js",
       "static/chunks/fd9d1056-9e625e8be9cf6216.js",
       "static/chunks/69-cceabd1c6ad33c86.js",
       "static/chunks/main-app-f7904b694d7af042.js",
-      "static/css/c991476172710d15.css",
-      "static/chunks/app/layout-269995f8aa9202c2.js"
+      "static/css/7cfd3fcb07703cae.css",
+      "static/chunks/app/layout-2376ebb95194f5fc.js"
     ],
     "/(public)/page": [
-      "static/chunks/webpack-b3301d2551ded499.js",
+      "static/chunks/webpack-690af541367f50f5.js",
       "static/chunks/fd9d1056-9e625e8be9cf6216.js",
       "static/chunks/69-cceabd1c6ad33c86.js",
       "static/chunks/main-app-f7904b694d7af042.js",
-      "static/chunks/250-4a638afc0db1ddc0.js",
-      "static/chunks/app/(public)/page-dff95ff3ff861d1b.js"
+      "static/chunks/app/(public)/page-883d036182767e6b.js"
     ],
     "/(public)/layout": [
-      "static/chunks/webpack-b3301d2551ded499.js",
+      "static/chunks/webpack-690af541367f50f5.js",
       "static/chunks/fd9d1056-9e625e8be9cf6216.js",
       "static/chunks/69-cceabd1c6ad33c86.js",
       "static/chunks/main-app-f7904b694d7af042.js",
@@ -32,11 +31,11 @@
       "static/chunks/app/(public)/layout-8bbcd99969112866.js"
     ],
     "/(public)/play/page": [
-      "static/chunks/webpack-b3301d2551ded499.js",
+      "static/chunks/webpack-690af541367f50f5.js",
       "static/chunks/fd9d1056-9e625e8be9cf6216.js",
       "static/chunks/69-cceabd1c6ad33c86.js",
       "static/chunks/main-app-f7904b694d7af042.js",
-      "static/chunks/app/(public)/play/page-4817ac7c9829ddc7.js"
+      "static/chunks/app/(public)/play/page-b1a9a004fe68a742.js"
     ]
   }
 }
