@@ -1,6 +1,5 @@
 'use client'
 
-import { useMemo } from 'react'
 import { PAYLINES_20 } from '@/constants/paylines'
 
 type Props = {
@@ -13,96 +12,73 @@ const W = 1000
 const H = 600
 
 function pointsFor(line: number[]): string {
-  // columns = 5 => x = (i/4)*1000
-  // rows = 3 => y = (row/2)*600
+  // ✅ use cell CENTERS:
+  // cols=5 => centerX = (i+0.5)/5 * W
+  // rows=3 => centerY = (row+0.5)/3 * H
   return line
     .map((row, i) => {
-      const x = (i / 4) * W
-      const y = (row / 2) * H
+      const x = ((i + 0.5) / 5) * W
+      const y = ((row + 0.5) / 3) * H
       return `${x},${y}`
     })
     .join(' ')
 }
 
 export default function PaylineOverlay({ selectedLine, showAllLines, winningLines }: Props) {
-  const set = useMemo(() => new Set(winningLines), [winningLines])
+  const winSet = new Set(winningLines)
 
-  const indices = useMemo(() => {
-    if (showAllLines) return PAYLINES_20.map((_, i) => i)
-    return [selectedLine]
-  }, [selectedLine, showAllLines])
+  const indices = showAllLines ? PAYLINES_20.map((_, i) => i) : [selectedLine]
 
   return (
     <svg
-      className="absolute inset-0 pointer-events-none"
+      className="absolute inset-0 z-20 pointer-events-none"
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
     >
       <defs>
-        {/* soft glow */}
         <filter id="glowPurple" x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="6" result="coloredBlur" />
+          <feGaussianBlur stdDeviation="6" result="b" />
           <feMerge>
-            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="b" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
 
         <filter id="glowGreen" x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="7" result="coloredBlur" />
+          <feGaussianBlur stdDeviation="7" result="b" />
           <feMerge>
-            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="b" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
 
-        {/* draw effect */}
-        <style>
-          {`
-            .zenyx-draw {
-              stroke-dasharray: 2400;
-              stroke-dashoffset: 2400;
-              animation: zenyxDraw 420ms ease forwards;
-            }
-            @keyframes zenyxDraw {
-              to { stroke-dashoffset: 0; }
-            }
-            .zenyx-fade {
-              animation: zenyxFade 200ms ease;
-            }
-            @keyframes zenyxFade {
-              from { opacity: 0.0; }
-              to { opacity: 1; }
-            }
-          `}
-        </style>
+        <style>{`
+          .zenyx-draw {
+            stroke-dasharray: 2400;
+            stroke-dashoffset: 2400;
+            animation: zenyxDraw 380ms ease forwards;
+          }
+          @keyframes zenyxDraw {
+            to { stroke-dashoffset: 0; }
+          }
+        `}</style>
       </defs>
 
       {indices.map((idx) => {
-        const isWin = set.has(idx)
-        const isSelected = idx === selectedLine && !showAllLines
-
-        // style tiers:
-        // - winning: green + stronger width
-        // - selected: purple + medium width
-        // - all lines: purple but thinner
-        const stroke = isWin ? 'rgba(34,197,94,0.95)' : 'rgba(139,92,246,0.85)'
-        const strokeWidth = isWin ? 9 : isSelected ? 8 : 5
-        const filter = isWin ? 'url(#glowGreen)' : 'url(#glowPurple)'
-        const opacity = showAllLines ? (isWin ? 1 : 0.55) : 1
+        const isWin = winSet.has(idx)
 
         return (
           <polyline
             key={idx}
-            className="zenyx-draw zenyx-fade"
+            className="zenyx-draw"
             points={pointsFor(PAYLINES_20[idx])}
             fill="none"
-            stroke={stroke}
-            strokeWidth={strokeWidth}
+            stroke={isWin ? 'rgba(34,197,94,0.95)' : 'rgba(139,92,246,0.9)'}
+            strokeWidth={isWin ? 9 : 7}
             strokeLinecap="round"
             strokeLinejoin="round"
-            filter={filter}
-            opacity={opacity}
+            opacity={showAllLines ? (isWin ? 1 : 0.45) : 1}
+            filter={isWin ? 'url(#glowGreen)' : 'url(#glowPurple)'}
           />
         )
       })}
