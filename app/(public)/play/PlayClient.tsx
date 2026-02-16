@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import SpinPanel from '@/components/SpinPanel'
 import ProviderLaunchFrame from '@/components/ProviderLaunchFrame'
-import SlotGrid from '@/components/SlotGrid'
+import SlotGrid, { SoundEvent } from '@/components/SlotGrid'
+import { PAYLINES_20 } from '@/constants/paylines'
 import { normalizePlayResponse } from '@/lib/normalize'
 
 type Wallet = {
@@ -23,7 +24,6 @@ function parseDecimal(v: any): number {
 }
 
 function emptyProviderGrid(): string[][] {
-  // provider grid format: grid[reel][row] => 5 reels x 3 rows
   return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => 'A'))
 }
 
@@ -33,6 +33,49 @@ function is5x3Grid(g: any): g is string[][] {
     g.length === 5 &&
     g.every((col) => Array.isArray(col) && col.length === 3 && col.every((x) => typeof x === 'string'))
   )
+}
+
+/**
+ * ✅ Basic SLOT line win detection (UI-side):
+ * - left to right
+ * - Wild = "W"
+ * - Scatter = "S" ignored for line matching
+ * - needs at least 3 matching reels
+ */
+function detectWinningLines(grid: string[][]): number[] {
+  const wins: number[] = []
+  const WILD = 'W'
+  const SCATTER = 'S'
+
+  for (let i = 0; i < PAYLINES_20.length; i++) {
+    const line = PAYLINES_20[i]
+    const seq = line.map((row, reel) => grid?.[reel]?.[row] ?? '')
+
+    // find base symbol: first non-wild, non-scatter from left
+    let base = ''
+    for (let r = 0; r < seq.length; r++) {
+      const s = seq[r]
+      if (!s || s === SCATTER) break // scatter breaks typical payline
+      if (s !== WILD) {
+        base = s
+        break
+      }
+    }
+    if (!base) continue
+
+    // count consecutive matches from reel0
+    let count = 0
+    for (let r = 0; r < seq.length; r++) {
+      const s = seq[r]
+      if (!s || s === SCATTER) break
+      if (s === base || s === WILD) count++
+      else break
+    }
+
+    if (count >= 3) wins.push(i)
+  }
+
+  return wins
 }
 
 export default function PlayClient() {
@@ -46,7 +89,6 @@ export default function PlayClient() {
   const [launchUrl, setLaunchUrl] = useState('')
   const [showProvider, setShowProvider] = useState(false)
 
-  // ✅ provider grid 5x3 (reel x row) for paylines
   const [providerGrid, setProviderGrid] = useState<string[][]>(() => emptyProviderGrid())
 
   const [wallet, setWallet] = useState<Wallet | null>(null)
@@ -59,6 +101,11 @@ export default function PlayClient() {
   const [spinning, setSpinning] = useState(false)
   const inFlightRef = useRef(false)
 
+  // Paylines UI state
+  const [selectedLine, setSelectedLine] = useState<number>(0)
+  const [showAllLines, setShowAllLines] = useState<boolean>(false)
+  const [winningLines, setWinningLines] = useState<number[]>([])
+
   const PROVIDER_BASE_URL = useMemo(() => {
     return (
       process.env.NEXT_PUBLIC_PROVIDER_BASE_URL ||
@@ -66,7 +113,19 @@ export default function PlayClient() {
     )
   }, [])
 
-  // ✅ Create session if missing sessionId in URL
+  // 🔊 Sound hook (you implement audio)
+  const onSound = (e: SoundEvent) => {
+    // TODO: plug your audio here
+    // examples:
+    // if (e.type === 'spin') play('spin')
+    // if (e.type === 'stop') play(`stop_${e.reelIndex}`)
+    // if (e.type === 'win') play('win')
+    // if (e.type === 'lineChange') play('tick')
+    // if (e.type === 'click') play('click')
+    // console.log('SOUND', e)
+  }
+
+  // ✅ Create session if missing sessionId
   useEffect(() => {
     if (!gameId) {
       setError('Missing gameId')
@@ -98,8 +157,10 @@ export default function PlayClient() {
         if (!alive) return
 
         setSessionId(json.sessionId)
-        setLaunchUrl(typeof json.launchUrl === 'string' ? json.launchUrl : '')
         setBalanceNumber(parseDecimal(json.balance))
+
+        const base = PROVIDER_BASE_URL.replace(/\/$/, '')
+        setLaunchUrl(`${base}/v1/launch?s=${encodeURIComponent(json.sessionId)}`)
 
         const next = new URLSearchParams(params.toString())
         next.set('sessionId', json.sessionId)
@@ -115,6 +176,22 @@ export default function PlayClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameId])
 
+  // ✅ Auto-cycle ONLY winning lines (when there are wins)
+  useEffect(() => {
+    if (winningLines.length <= 1) return
+
+    let i = 0
+    const t = setInterval(() => {
+      setShowAllLines(false)
+      setSelectedLine(winningLines[i])
+      onSound({ type: 'lineChange', lineIndex: winningLines[i] })
+      i = (i + 1) % winningLines.length
+    }, 900)
+
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [winningLines])
+
   async function onSpin() {
     if (!sessionId || !gameId) return
     if (inFlightRef.current) return
@@ -123,6 +200,12 @@ export default function PlayClient() {
     setSpinning(true)
     setError('')
     setWin(0)
+    setWinningLines([])
+
+    // If no wins, advance line each spin (fast casino feel)
+    setShowAllLines(false)
+    setSelectedLine((prev) => (prev + 1) % PAYLINES_20.length)
+    onSound({ type: 'lineChange', lineIndex: (selectedLine + 1) % PAYLINES_20.length })
 
     try {
       const res = await fetch('/api/play', {
@@ -133,34 +216,38 @@ export default function PlayClient() {
 
       const raw = await res.json()
 
-      // 🔍 DEBUG
-      console.log('PLAY RAW RESPONSE:', raw)
-      console.log('GRID RAW:', raw?.result?.grid)
+      // DEBUG (optional)
+      // console.log('PLAY RAW RESPONSE:', raw)
+      // console.log('GRID RAW:', raw?.result?.grid)
 
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // ✅ wallet object: raw.balance.balance
+      // wallet
       if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal((raw.balance as Wallet).balance))
       }
 
-      // ✅ set provider grid 5x3 for paylines overlay
+      // provider grid 5x3
       const rg = raw?.result?.grid
       if (is5x3Grid(rg)) {
         setProviderGrid(rg)
-      } else {
-        // provider sometimes might send 3x5; normalize to 5x3 if needed
-        const n = normalizePlayResponse(raw, { gameId, providerBaseUrl: PROVIDER_BASE_URL })
-        // n.grid is 3x5 assets; we still keep current providerGrid to avoid breaking paylines
-        // If you want full conversion, tell me and I’ll add it.
+
+        // detect winning lines (UI-side)
+        const wins = detectWinningLines(rg)
+        setWinningLines(wins)
+
+        // if there are wins, immediately show first win line (and auto-cycle will start)
+        if (wins.length > 0) {
+          setShowAllLines(false)
+          setSelectedLine(wins[0])
+          onSound({ type: 'lineChange', lineIndex: wins[0] })
+          onSound({ type: 'win' })
+        }
       }
 
-      // ✅ win number
-      const normalized = normalizePlayResponse(raw, {
-        gameId,
-        providerBaseUrl: PROVIDER_BASE_URL
-      })
+      // win number (provider)
+      const normalized = normalizePlayResponse(raw, { gameId, providerBaseUrl: PROVIDER_BASE_URL })
       setWin(normalized.win)
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
@@ -168,7 +255,7 @@ export default function PlayClient() {
       setTimeout(() => {
         setSpinning(false)
         inFlightRef.current = false
-      }, 550) // fast
+      }, 550)
     }
   }
 
@@ -190,22 +277,26 @@ export default function PlayClient() {
 
         <button
           disabled={!sessionId}
-          onClick={() => {
-            const base = PROVIDER_BASE_URL.replace(/\/$/, '')
-            const url = `${base}/v1/launch?s=${encodeURIComponent(sessionId)}`
-            setLaunchUrl(url)
-            setShowProvider(true)
-          }}
+          onClick={() => setShowProvider(true)}
           className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 disabled:opacity-50"
         >
           PROVIDER VIEW
         </button>
       </div>
 
-      {/* ✅ SLOT GRID + PAYLINES OVERLAY (provider grid 5x3) */}
-      <SlotGrid grid={providerGrid} providerBase={PROVIDER_BASE_URL} gameId={gameId} />
+      <SlotGrid
+        gameId={gameId}
+        providerBase={PROVIDER_BASE_URL}
+        grid={providerGrid}
+        spinning={spinning}
+        selectedLine={selectedLine}
+        setSelectedLine={setSelectedLine}
+        showAllLines={showAllLines}
+        setShowAllLines={setShowAllLines}
+        winningLines={winningLines}
+        onSound={onSound}
+      />
 
-      {/* Bottom panel */}
       <SpinPanel
         balance={balanceNumber}
         win={win}
@@ -213,6 +304,13 @@ export default function PlayClient() {
         setBet={setBet}
         onSpin={onSpin}
         spinning={spinning}
+        onSound={(name) => {
+          // keep compatibility with your SpinPanel hook
+          if (name === 'click') onSound({ type: 'click' })
+          if (name === 'spin') onSound({ type: 'spin' })
+          if (name === 'win') onSound({ type: 'win' })
+          if (name === 'stop') onSound({ type: 'stop', reelIndex: 0 })
+        }}
       />
 
       {showProvider && launchUrl ? (
