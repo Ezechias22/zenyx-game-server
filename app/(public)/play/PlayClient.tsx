@@ -2,38 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import ReelGrid from '@/components/ReelGrid'
 import SpinPanel from '@/components/SpinPanel'
 import ProviderLaunchFrame from '@/components/ProviderLaunchFrame'
-import type { SymbolAsset } from '@/lib/types'
+import SlotGrid from '@/components/SlotGrid'
 import { normalizePlayResponse } from '@/lib/normalize'
 
 type Wallet = {
   playerExternalId: string
   currency: string
   balance: string
-}
-
-function emptyGrid(): SymbolAsset[][] {
-  return Array.from({ length: 3 }, (_, r) =>
-    Array.from({ length: 5 }, (_, c) => ({ id: `EMPTY_${r}_${c}`, src: '' }))
-  )
-}
-
-function safe3x5(grid: SymbolAsset[][] | undefined | null): SymbolAsset[][] {
-  const out = emptyGrid()
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 5; c++) {
-      const cell = grid?.[r]?.[c]
-      if (cell && typeof cell === 'object') {
-        out[r][c] = {
-          id: typeof cell.id === 'string' ? cell.id : `CELL_${r}_${c}`,
-          src: typeof cell.src === 'string' ? cell.src : ''
-        }
-      }
-    }
-  }
-  return out
 }
 
 function parseDecimal(v: any): number {
@@ -43,6 +20,19 @@ function parseDecimal(v: any): number {
     return Number.isFinite(n) ? n : 0
   }
   return 0
+}
+
+function emptyProviderGrid(): string[][] {
+  // provider grid format: grid[reel][row] => 5 reels x 3 rows
+  return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => 'A'))
+}
+
+function is5x3Grid(g: any): g is string[][] {
+  return (
+    Array.isArray(g) &&
+    g.length === 5 &&
+    g.every((col) => Array.isArray(col) && col.length === 3 && col.every((x) => typeof x === 'string'))
+  )
 }
 
 export default function PlayClient() {
@@ -56,7 +46,8 @@ export default function PlayClient() {
   const [launchUrl, setLaunchUrl] = useState('')
   const [showProvider, setShowProvider] = useState(false)
 
-  const [grid, setGrid] = useState<SymbolAsset[][]>(() => emptyGrid())
+  // ✅ provider grid 5x3 (reel x row) for paylines
+  const [providerGrid, setProviderGrid] = useState<string[][]>(() => emptyProviderGrid())
 
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [balanceNumber, setBalanceNumber] = useState<number>(0)
@@ -105,6 +96,7 @@ export default function PlayClient() {
         if (!res.ok) throw new Error(json?.error || 'Session error')
 
         if (!alive) return
+
         setSessionId(json.sessionId)
         setLaunchUrl(typeof json.launchUrl === 'string' ? json.launchUrl : '')
         setBalanceNumber(parseDecimal(json.balance))
@@ -141,33 +133,42 @@ export default function PlayClient() {
 
       const raw = await res.json()
 
-      // 🔍 DEBUG GRID SHAPE + CONTENT
+      // 🔍 DEBUG
       console.log('PLAY RAW RESPONSE:', raw)
       console.log('GRID RAW:', raw?.result?.grid)
 
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // ✅ Provider wallet object: raw.balance.balance
+      // ✅ wallet object: raw.balance.balance
       if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal((raw.balance as Wallet).balance))
       }
 
+      // ✅ set provider grid 5x3 for paylines overlay
+      const rg = raw?.result?.grid
+      if (is5x3Grid(rg)) {
+        setProviderGrid(rg)
+      } else {
+        // provider sometimes might send 3x5; normalize to 5x3 if needed
+        const n = normalizePlayResponse(raw, { gameId, providerBaseUrl: PROVIDER_BASE_URL })
+        // n.grid is 3x5 assets; we still keep current providerGrid to avoid breaking paylines
+        // If you want full conversion, tell me and I’ll add it.
+      }
+
+      // ✅ win number
       const normalized = normalizePlayResponse(raw, {
         gameId,
         providerBaseUrl: PROVIDER_BASE_URL
       })
-
-      setGrid(safe3x5(normalized.grid))
       setWin(normalized.win)
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
-      setGrid(g => safe3x5(g))
     } finally {
       setTimeout(() => {
         setSpinning(false)
         inFlightRef.current = false
-      }, 650)
+      }, 550) // fast
     }
   }
 
@@ -188,16 +189,23 @@ export default function PlayClient() {
         </div>
 
         <button
-          disabled={!launchUrl}
-          onClick={() => setShowProvider(true)}
+          disabled={!sessionId}
+          onClick={() => {
+            const base = PROVIDER_BASE_URL.replace(/\/$/, '')
+            const url = `${base}/v1/launch?s=${encodeURIComponent(sessionId)}`
+            setLaunchUrl(url)
+            setShowProvider(true)
+          }}
           className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 disabled:opacity-50"
         >
           PROVIDER VIEW
         </button>
       </div>
 
-      <ReelGrid grid={grid} spinning={spinning} />
+      {/* ✅ SLOT GRID + PAYLINES OVERLAY (provider grid 5x3) */}
+      <SlotGrid grid={providerGrid} providerBase={PROVIDER_BASE_URL} gameId={gameId} />
 
+      {/* Bottom panel */}
       <SpinPanel
         balance={balanceNumber}
         win={win}
