@@ -7,25 +7,32 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
+  const env = getEnv()
+
+  let body: any
   try {
-    const body = await req.json()
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
 
-    const gameCode = typeof body?.gameCode === 'string' ? body.gameCode.trim() : ''
-    const playerExternalId = typeof body?.playerExternalId === 'string' ? body.playerExternalId.trim() : ''
-    const currency = typeof body?.currency === 'string' ? body.currency.trim() : ''
-    const clientSeed = typeof body?.clientSeed === 'string' ? body.clientSeed.trim() : undefined
+  const gameCode = String(body?.gameCode ?? '').trim()
+  const playerExternalId = String(body?.playerExternalId ?? '').trim()
+  const currency = String(body?.currency ?? '').trim()
+  const clientSeed = body?.clientSeed ? String(body.clientSeed).trim() : undefined
 
-    if (!gameCode) return NextResponse.json({ error: 'Missing gameCode' }, { status: 400 })
-    if (!playerExternalId) return NextResponse.json({ error: 'Missing playerExternalId' }, { status: 400 })
-    if (!currency) return NextResponse.json({ error: 'Missing currency' }, { status: 400 })
+  if (!gameCode || !playerExternalId || !currency) {
+    return NextResponse.json(
+      { error: 'Missing required fields: gameCode, playerExternalId, currency' },
+      { status: 400 }
+    )
+  }
 
+  try {
     const raw = await providerCreateSession({ gameCode, playerExternalId, currency, clientSeed })
-
-    const { PROVIDER_BASE_URL } = getEnv()
-    const session = normalizeSessionResponse(raw, PROVIDER_BASE_URL)
-
-    return NextResponse.json(session, { status: 200 })
+    const session = normalizeSessionResponse(raw, env.PROVIDER_BASE_URL)
+    return NextResponse.json(session)
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'Server error' }, { status: 500 })
+    return NextResponse.json({ error: e?.message ?? 'Failed to create session' }, { status: 400 })
   }
 }

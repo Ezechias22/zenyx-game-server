@@ -76,7 +76,7 @@ function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
   if (!Array.isArray(rawWins)) return []
   const winsRaw = rawWins as ProviderWinRaw[]
 
-  const out: ProviderWin[] = winsRaw
+  return winsRaw
     .filter((w: ProviderWinRaw) => Array.isArray(w.positions))
     .map((w: ProviderWinRaw) => {
       const positions =
@@ -86,8 +86,6 @@ function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
       return { positions }
     })
     .filter((w: ProviderWin) => w.positions.length >= 2)
-
-  return out
 }
 
 function useAnimatedNumber(value: number, durationMs = 300) {
@@ -103,8 +101,7 @@ function useAnimatedNumber(value: number, durationMs = 300) {
     const start = performance.now()
     const tick = (t: number) => {
       const p = Math.min(1, (t - start) / durationMs)
-      // easeOutCubic
-      const eased = 1 - Math.pow(1 - p, 3)
+      const eased = 1 - Math.pow(1 - p, 3) // easeOutCubic
       const cur = from + (to - from) * eased
       setDisplay(cur)
       if (p < 1) rafRef.current = requestAnimationFrame(tick)
@@ -122,6 +119,39 @@ function useAnimatedNumber(value: number, durationMs = 300) {
   return display
 }
 
+/**
+ * ✅ Support 2 shapes:
+ * A) API passthrough raw provider:
+ *    { result: { grid, wins, win, freeSpinsRemaining }, balance: {..} }
+ * B) API normalized (server normalizePlayResponse):
+ *    { grid: SymbolAsset[][], balance:number, win:number, ...maybe freeSpinsRemaining }
+ *
+ * For UI we always keep a 5x3 string grid (provider orientation).
+ */
+function extractProviderGrid5x3(raw: any): string[][] | null {
+  // raw provider path
+  const g1 = to5x3(raw?.result?.grid)
+  if (g1) return g1
+
+  // normalized grid: SymbolAsset[][] (3x5 rows/cols) -> convert to 5x3 keys from ids if possible
+  const g2 = raw?.grid
+  if (Array.isArray(g2) && Array.isArray(g2?.[0]) && g2.length === 3 && g2[0].length === 5) {
+    const out = empty5x3()
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 5; col++) {
+        const cell = g2[row][col]
+        const id = typeof cell?.id === 'string' ? cell.id : ''
+        // id often "A_0_0" => take part before first "_"
+        const key = id.includes('_') ? id.split('_')[0] : ''
+        out[col][row] = key
+      }
+    }
+    return out
+  }
+
+  return null
+}
+
 export default function PlayClient() {
   const router = useRouter()
   const params = useSearchParams()
@@ -130,7 +160,9 @@ export default function PlayClient() {
   const sessionIdParam = params.get('sessionId') ?? ''
 
   const PROVIDER_BASE_URL = useMemo(
-    () => process.env.NEXT_PUBLIC_PROVIDER_BASE_URL || 'https://zenyx-games-provider-production.up.railway.app',
+    () =>
+      process.env.NEXT_PUBLIC_PROVIDER_BASE_URL ||
+      'https://zenyx-games-provider-production.up.railway.app',
     []
   )
 
@@ -236,7 +268,7 @@ export default function PlayClient() {
   }, [gameId])
 
   async function doSpin(trigger: 'manual' | 'auto' = 'manual') {
-    if (!sessionId) return
+    if (!sessionId || !gameId) return
     if (inFlight.current) return
 
     inFlight.current = true
@@ -246,9 +278,13 @@ export default function PlayClient() {
     setWin(0)
 
     try {
-      // ✅ IMPORTANT: during free spins, DO NOT send bet
       const betToSend = Math.max(1, Number(bet) || 1)
-      const payload = freeSpinsRemaining > 0 ? { sessionId } : { sessionId, bet: betToSend }
+
+      // ✅ IMPORTANT: during free spins, DO NOT send bet
+      const payload =
+        freeSpinsRemaining > 0
+          ? { sessionId, gameId }
+          : { sessionId, gameId, bet: betToSend }
 
       const res = await fetch('/api/play', {
         method: 'POST',
@@ -257,30 +293,38 @@ export default function PlayClient() {
       })
 
       const raw: any = await res.json()
+
       console.log('PLAY RAW RESPONSE:', raw)
-      console.log('GRID RAW:', raw?.result?.grid)
-      console.log('FREE SPINS REMAINING:', raw?.freeSpinsRemaining, raw?.result?.freeSpinsRemaining)
+      console.log('GRID RAW:', raw?.result?.grid ?? raw?.grid)
 
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // wallet/balance
-      if (raw?.balance) {
+      // wallet/balance: support both shapes
+      if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal(raw.balance.balance))
+      } else if (raw?.wallet && typeof raw.wallet === 'object') {
+        setWallet(raw.wallet as Wallet)
+        setBalanceNumber(parseDecimal(raw.wallet.balance))
+      } else if (raw?.balance != null) {
+        setBalanceNumber(parseDecimal(raw.balance))
       }
 
       // grid
-      const g = to5x3(raw?.result?.grid)
+      const g = extractProviderGrid5x3(raw)
       if (g) {
         setGrid(g)
-        setScatters(countScattersFromGrid(g))
+        const sc = countScattersFromGrid(g)
+        setScatters(sc)
+        console.log('SCATTER COUNT (normalized):', sc)
       } else {
-        // if provider returned no grid, keep last grid (avoid black screen)
+        // keep last grid (avoid black screen)
         setScatters(0)
       }
 
       // wins (for payline highlight)
-      setWins(normalizeProviderWins(raw?.result?.wins))
+      const winsRaw = raw?.result?.wins ?? raw?.wins ?? []
+      setWins(normalizeProviderWins(winsRaw))
 
       // win
       setWin(parseDecimal(raw?.win ?? raw?.result?.win ?? 0))
@@ -292,7 +336,8 @@ export default function PlayClient() {
         raw?.result?.freeSpins?.remaining ??
         0
 
-      const fs = typeof fsRaw === 'string' ? Number.parseInt(fsRaw, 10) : Number(fsRaw)
+      const fs =
+        typeof fsRaw === 'string' ? Number.parseInt(fsRaw, 10) : Number(fsRaw)
       const fsSafe = Number.isFinite(fs) ? fs : 0
 
       // bonus intro when entering free spins
@@ -305,7 +350,6 @@ export default function PlayClient() {
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
     } finally {
-      // not slow: short settle time for UI
       window.setTimeout(() => {
         setSpinning(false)
         inFlight.current = false
@@ -323,7 +367,7 @@ export default function PlayClient() {
     if (freeSpinsRemaining > 0 && !spinning && !inFlight.current) {
       autoTimerRef.current = window.setTimeout(() => {
         doSpin('auto')
-      }, 520) // fast but still readable
+      }, 520)
     }
 
     return () => {
@@ -349,7 +393,8 @@ export default function PlayClient() {
         <div>
           <div className="text-lg font-extrabold">{headerTitle}</div>
           <div className="text-xs text-white/60">
-            {wallet?.currency ?? 'BRL'} • Balance: {(animBalance || 0).toFixed(2)}
+            {wallet?.currency ?? 'BRL'} • Balance:{' '}
+            {(Number.isFinite(animBalance) ? animBalance : balanceNumber).toFixed(2)}
             {inFreeSpins ? (
               <span className="ml-2 font-extrabold text-amber-200">
                 FREE SPINS: {Math.max(0, Math.round(animFree))}
@@ -396,7 +441,7 @@ export default function PlayClient() {
         <SlotGrid
           grid={grid}
           spinning={spinning}
-          symbolMap={{}} // SlotGrid fait son fallback intelligent (si tu utilises celui qu’on a mis)
+          symbolMap={{}}
           wins={wins}
           scattersCount={scatters}
           freeSpinsRemaining={freeSpinsRemaining}
@@ -411,20 +456,32 @@ export default function PlayClient() {
         bet={bet}
         setBet={setBet}
         onSpin={() => doSpin('manual')}
-        spinning={spinning || inFreeSpins} // optional: lock while auto-running
+        // ✅ pendant free spins on peut désactiver manuellement (auto-play)
+        spinning={spinning || inFreeSpins}
       />
 
       {showProvider && launchUrl ? (
         <ProviderLaunchFrame launchUrl={launchUrl} onClose={() => setShowProvider(false)} />
       ) : null}
 
-      {/* ✅ required keyframes (Tailwind can't auto-generate custom) */}
       <style jsx global>{`
         @keyframes fadeInOut {
-          0% { opacity: 0; transform: scale(0.98); }
-          12% { opacity: 1; transform: scale(1); }
-          70% { opacity: 1; transform: scale(1); }
-          100% { opacity: 0; transform: scale(1.02); }
+          0% {
+            opacity: 0;
+            transform: scale(0.98);
+          }
+          12% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          70% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          100% {
+            opacity: 0;
+            transform: scale(1.02);
+          }
         }
       `}</style>
     </div>

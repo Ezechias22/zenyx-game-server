@@ -1,8 +1,8 @@
 {
   "/_not-found": "app/_not-found.js",
-  "/api/session/route": "app/api/session/route.js",
   "/api/games/route": "app/api/games/route.js",
   "/api/play/route": "app/api/play/route.js",
+  "/api/session/route": "app/api/session/route.js",
   "/(public)/page": "app/(public)/page.js",
   "/(public)/play/page": "app/(public)/play/page.js"
 }

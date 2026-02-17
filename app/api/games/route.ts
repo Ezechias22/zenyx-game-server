@@ -7,12 +7,12 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const env = getEnv()
   try {
     const raw = await providerGetGames()
-    const { PROVIDER_BASE_URL } = getEnv()
-    const games = normalizeGamesResponse(raw, PROVIDER_BASE_URL)
-    return NextResponse.json({ games }, { status: 200 })
+    const games = normalizeGamesResponse(raw, env.PROVIDER_BASE_URL)
+    return NextResponse.json(games)
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'Server error' }, { status: 500 })
+    return NextResponse.json({ error: e?.message ?? 'Failed to fetch games' }, { status: 500 })
   }
 }

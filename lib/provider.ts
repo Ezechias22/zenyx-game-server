@@ -43,7 +43,6 @@ async function providerFetch<T>({ method = 'GET', path, body }: ProviderCallOpti
 }
 
 export function providerGetGames() {
-  // ✅ GET /v1/public/games
   return providerFetch<any>({ path: '/v1/public/games' })
 }
 
@@ -53,7 +52,6 @@ export function providerCreateSession(input: {
   currency: string
   clientSeed?: string
 }) {
-  // ✅ POST /v1/public/session
   return providerFetch<any>({
     method: 'POST',
     path: '/v1/public/session',
@@ -61,8 +59,8 @@ export function providerCreateSession(input: {
   })
 }
 
-export function providerPlay(input: { sessionId: string; bet: number }) {
-  // ✅ POST /v1/public/play
+// ✅ bet devient optionnel (free spins)
+export function providerPlay(input: { sessionId: string; bet?: number }) {
   return providerFetch<any>({
     method: 'POST',
     path: '/v1/public/play',

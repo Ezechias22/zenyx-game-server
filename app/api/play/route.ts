@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server'
 import { providerPlay } from '@/lib/provider'
-import { getEnv } from '@/lib/env'
 import { normalizePlayResponse } from '@/lib/normalize'
+import { getEnv } from '@/lib/env'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-type PlayPayload = { sessionId: string; bet?: number }
 
 export async function POST(req: Request) {
   const env = getEnv()
@@ -19,42 +17,33 @@ export async function POST(req: Request) {
   }
 
   const sessionId = String(body?.sessionId ?? '').trim()
-  if (!sessionId) {
-    return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 })
-  }
+  const gameId = String(body?.gameId ?? '').trim()
 
-  // bet OPTIONAL (free spins)
+  if (!sessionId) return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 })
+  if (!gameId) return NextResponse.json({ error: 'Missing gameId' }, { status: 400 })
+
+  // bet optionnel (free spins => ne pas envoyer)
   const betRaw = body?.bet
-  const betNum =
+  const bet =
     typeof betRaw === 'number'
       ? betRaw
       : typeof betRaw === 'string'
       ? Number.parseFloat(betRaw)
       : undefined
 
-  const payload: PlayPayload = { sessionId }
-  if (Number.isFinite(betNum) && (betNum as number) > 0) payload.bet = betNum as number
-
   try {
-    // ✅ handle BOTH possible signatures:
-    // providerPlay(env, payload) OR providerPlay(payload)
     const raw =
-      (providerPlay as any).length >= 2
-        ? await (providerPlay as any)(env, payload)
-        : await (providerPlay as any)(payload)
+      typeof bet === 'number' && Number.isFinite(bet) && bet > 0
+        ? await providerPlay({ sessionId, bet })
+        : await providerPlay({ sessionId }) // ✅ FREE SPINS MODE
 
-    // ✅ handle BOTH possible signatures:
-    // normalizePlayResponse(raw) OR normalizePlayResponse(raw, opts)
-    const normalized =
-      (normalizePlayResponse as any).length >= 2
-        ? (normalizePlayResponse as any)(raw, { env })
-        : (normalizePlayResponse as any)(raw)
+    const normalized = normalizePlayResponse(raw, {
+      gameId,
+      providerBaseUrl: env.PROVIDER_BASE_URL
+    })
 
-    return NextResponse.json(normalized, { status: 200 })
+    return NextResponse.json(normalized)
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? 'Provider play failed' },
-      { status: 400 }
-    )
+    return NextResponse.json({ error: e?.message ?? 'Spin failed' }, { status: 400 })
   }
 }
