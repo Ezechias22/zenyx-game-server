@@ -4,21 +4,12 @@ import { useMemo } from 'react'
 import PaylineOverlay from '@/components/PaylineOverlay'
 import { PAYLINES_20 } from '@/constants/paylines'
 
-export type SoundEvent =
-  | { type: 'spin' }
-  | { type: 'stop'; reelIndex: number }
-  | { type: 'win' }
-  | { type: 'click' }
-
 type Props = {
   gameId: string
   providerBase: string
   grid: string[][] // 5x3 reel x row
   spinning: boolean
-
-  // gagnants uniquement
-  winningLines: number[] // indices
-  onSound?: (e: SoundEvent) => void
+  winningLines: number[] // indices (paylines gagnantes)
 }
 
 function clamp5x3(grid: string[][]): string[][] {
@@ -27,26 +18,37 @@ function clamp5x3(grid: string[][]): string[][] {
   return out
 }
 
-export default function SlotGrid({
-  gameId,
-  providerBase,
-  grid,
-  spinning,
-  winningLines,
-  onSound
-}: Props) {
+export default function SlotGrid({ gameId, providerBase, grid, spinning, winningLines }: Props) {
   const g = useMemo(() => clamp5x3(grid), [grid])
-  const hasWin = winningLines.length > 0
+  const hasLineWin = winningLines.length > 0
 
   const base = providerBase.replace(/\/$/, '')
   const symbolUrl = (sym: string) => `${base}/assets/${gameId}/symbols/${encodeURIComponent(sym)}.png`
 
+  // ✅ Scatter bonus detection (3+ anywhere)
+  const scatterCells = useMemo(() => {
+    const cells: Array<{ reel: number; row: number }> = []
+    for (let reel = 0; reel < 5; reel++) {
+      for (let row = 0; row < 3; row++) {
+        if (g[reel][row] === 'S') cells.push({ reel, row })
+      }
+    }
+    return cells
+  }, [g])
+
+  const scatterCount = scatterCells.length
+  const hasScatterBonus = scatterCount >= 3
+
   function isWinningCell(reel: number, row: number) {
-    if (!hasWin) return false
+    if (!hasLineWin) return false
     for (const li of winningLines) {
       if (PAYLINES_20[li]?.[reel] === row) return true
     }
     return false
+  }
+
+  function isScatterCell(reel: number, row: number) {
+    return g[reel][row] === 'S'
   }
 
   return (
@@ -54,12 +56,20 @@ export default function SlotGrid({
       <div className="relative">
         <div className="rounded-2xl border border-white/10 bg-black/40 p-[clamp(10px,2vw,16px)]">
           <div className="relative">
+            {/* ✅ BONUS banner */}
+            {hasScatterBonus ? (
+              <div className="absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100 shadow-[0_0_20px_rgba(245,158,11,0.25)]">
+                BONUS TRIGGER • SCATTER ×{scatterCount}
+              </div>
+            ) : null}
+
             <div className="grid grid-cols-5 gap-[clamp(8px,1.4vw,12px)]">
               {Array.from({ length: 5 }).map((_, reel) => (
                 <div key={`reel_${reel}`} className="grid grid-rows-3 gap-[clamp(8px,1.4vw,12px)]">
                   {Array.from({ length: 3 }).map((_, row) => {
                     const sym = g[reel][row]
                     const winCell = isWinningCell(reel, row)
+                    const scCell = isScatterCell(reel, row)
 
                     return (
                       <div
@@ -67,7 +77,9 @@ export default function SlotGrid({
                         className={`relative aspect-square overflow-hidden rounded-[clamp(12px,1.6vw,18px)] border bg-black/35 flex items-center justify-center transition-all duration-150 ${
                           winCell
                             ? 'border-emerald-400/40 shadow-[0_0_18px_rgba(34,197,94,0.35)]'
-                            : 'border-white/10'
+                            : scCell && hasScatterBonus
+                              ? 'border-amber-300/40 shadow-[0_0_18px_rgba(245,158,11,0.28)]'
+                              : 'border-white/10'
                         }`}
                       >
                         {sym ? (
@@ -75,7 +87,7 @@ export default function SlotGrid({
                             src={symbolUrl(sym)}
                             alt={sym}
                             className={`h-[82%] w-[82%] object-contain transition-all duration-150 ${
-                              spinning ? 'scale-95 blur-[1.5px] opacity-90' : winCell ? 'scale-110' : 'scale-100'
+                              spinning ? 'scale-95 blur-[1.5px] opacity-90' : winCell || (scCell && hasScatterBonus) ? 'scale-110' : 'scale-100'
                             }`}
                             draggable={false}
                             loading="eager"
@@ -85,7 +97,7 @@ export default function SlotGrid({
                           <div className="text-white/20 text-xs font-semibold">•</div>
                         )}
 
-                        {/* flash only on win */}
+                        {/* win flash */}
                         <div
                           className={`pointer-events-none absolute inset-0 transition-opacity duration-150 ${
                             winCell ? 'opacity-100' : 'opacity-0'
@@ -95,6 +107,17 @@ export default function SlotGrid({
                               'radial-gradient(circle at 50% 45%, rgba(34,197,94,0.18), transparent 60%)'
                           }}
                         />
+
+                        {/* scatter bonus flash */}
+                        <div
+                          className={`pointer-events-none absolute inset-0 transition-opacity duration-150 ${
+                            scCell && hasScatterBonus ? 'opacity-100' : 'opacity-0'
+                          }`}
+                          style={{
+                            background:
+                              'radial-gradient(circle at 50% 45%, rgba(245,158,11,0.18), transparent 60%)'
+                          }}
+                        />
                       </div>
                     )
                   })}
@@ -102,25 +125,18 @@ export default function SlotGrid({
               ))}
             </div>
 
-            {/* ✅ paylines ONLY on gains */}
+            {/* ✅ paylines only on wins (as you requested) */}
             <PaylineOverlay winningLines={winningLines} />
           </div>
         </div>
       </div>
 
-      {/* ✅ Controls ONLY if win (sinon rien) */}
-      {hasWin ? (
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-          <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-xs font-extrabold text-emerald-100">
-            WIN LINES: {winningLines.map((i) => i + 1).join(', ')}
+      {/* ✅ info bar for bonus (optional) */}
+      {hasScatterBonus ? (
+        <div className="mt-4 flex justify-center">
+          <div className="rounded-xl border border-amber-300/20 bg-amber-500/10 px-4 py-2 text-xs font-bold text-amber-100">
+            Scatter Bonus triggered (UI). If provider returns bonus details later, we’ll render them here.
           </div>
-
-          <button
-            onClick={() => onSound?.({ type: 'click' })}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/85 hover:bg-white/10"
-          >
-            OK
-          </button>
         </div>
       ) : null}
     </div>
