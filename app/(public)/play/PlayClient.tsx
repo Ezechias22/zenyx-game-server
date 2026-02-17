@@ -324,7 +324,10 @@ export default function PlayClient() {
         wins={wins}
         scattersCount={scatters}
         freeSpinsRemaining={freeSpinsRemaining}
+        providerBaseUrl={PROVIDER_BASE_URL}
+        gameId={gameId}
       />
+
 
       <SpinPanel
         balance={balanceNumber}
