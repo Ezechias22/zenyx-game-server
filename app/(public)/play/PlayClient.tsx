@@ -12,17 +12,15 @@ type Wallet = { playerExternalId: string; currency: string; balance: string }
 type Game = {
   id: string
   name: string
-  kind: 'SLOT' | 'CRASH' | 'DICE' | string
-  assets: {
+  kind?: string
+  assets?: {
     cover?: string
     background?: string
-    symbols?: string[]
+    symbols?: string[] // provider paths or absolute urls
   }
 }
 
-type ProviderWinRaw = {
-  positions?: Array<{ reel?: number; row?: number }>
-}
+type ProviderEvent = { type: string; [k: string]: unknown }
 
 function parseDecimal(v: unknown): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v
@@ -42,12 +40,12 @@ function to5x3(raw: unknown): string[][] | null {
 
   // provider: 5 reels x 3 rows
   if (raw.length === 5 && raw.every((c) => Array.isArray(c) && (c as unknown[]).length === 3)) {
-    return raw.map((col) => (col as unknown[]).map((x) => String(x ?? ''))) as string[][]
+    return raw.map((col) => (col as unknown[]).map((x: unknown) => String(x ?? '')))
   }
 
-  // sometimes comes 3 rows x 5 reels -> transpose
+  // sometimes: 3 rows x 5 reels -> transpose
   if (raw.length === 3 && raw.every((r) => Array.isArray(r) && (r as unknown[]).length === 5)) {
-    const out = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
+    const out = empty5x3()
     for (let row = 0; row < 3; row++) {
       const rowArr = raw[row] as unknown[]
       for (let reel = 0; reel < 5; reel++) {
@@ -60,96 +58,53 @@ function to5x3(raw: unknown): string[][] | null {
   return null
 }
 
-function countScattersFromGrid(g: string[][] | null): number {
-  if (!g) return 0
-  let c = 0
-  for (let reel = 0; reel < 5; reel++) {
-    for (let row = 0; row < 3; row++) {
-      const k = String(g[reel]?.[row] ?? '').toLowerCase()
-      if (k === 's' || k === 'scatter') c++
-    }
-  }
-  return c
-}
-
-function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
+function normalizeWins(rawWins: unknown): ProviderWin[] {
   if (!Array.isArray(rawWins)) return []
-  const winsRaw = rawWins as ProviderWinRaw[]
-
-  return winsRaw
-    .filter((w: ProviderWinRaw) => Array.isArray(w.positions))
-    .map((w: ProviderWinRaw) => {
-      const positions =
-        (w.positions ?? [])
-          .filter((p) => p && Number.isFinite(p.reel) && Number.isFinite(p.row))
-          .map((p) => ({ reel: Number(p.reel), row: Number(p.row) })) ?? []
-      return { positions }
-    })
-    .filter((w: ProviderWin) => w.positions.length >= 2)
-}
-
-function useAnimatedNumber(value: number, durationMs = 300) {
-  const [display, setDisplay] = useState(value)
-  const fromRef = useRef(value)
-  const rafRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    const from = fromRef.current
-    const to = value
-    if (from === to) return
-
-    const start = performance.now()
-    const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / durationMs)
-      const eased = 1 - Math.pow(1 - p, 3) // easeOutCubic
-      const cur = from + (to - from) * eased
-      setDisplay(cur)
-      if (p < 1) rafRef.current = requestAnimationFrame(tick)
-      else fromRef.current = to
-    }
-
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    rafRef.current = requestAnimationFrame(tick)
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    }
-  }, [value, durationMs])
-
-  return display
+  return (rawWins as any[])
+    .filter((w) => Array.isArray(w?.positions))
+    .map((w) => ({
+      positions: (w.positions as any[])
+        .filter((p) => Number.isFinite(p?.reel) && Number.isFinite(p?.row))
+        .map((p) => ({ reel: Number(p.reel), row: Number(p.row) }))
+    }))
+    .filter((w) => w.positions.length >= 2)
 }
 
 /**
- * ✅ Support 2 shapes:
- * A) API passthrough raw provider:
- *    { result: { grid, wins, win, freeSpinsRemaining }, balance: {..} }
- * B) API normalized (server normalizePlayResponse):
- *    { grid: SymbolAsset[][], balance:number, win:number, ...maybe freeSpinsRemaining }
- *
- * For UI we always keep a 5x3 string grid (provider orientation).
+ * Build symbolMap from catalog assets.symbols:
+ * input: ["/assets/fruit_classic/symbols/cherry.png", ...]
+ * output: { cherry: "https://.../assets/.../cherry.png", ... }
  */
-function extractProviderGrid5x3(raw: any): string[][] | null {
-  // raw provider path
-  const g1 = to5x3(raw?.result?.grid)
-  if (g1) return g1
+function buildSymbolMap(
+  providerBaseUrl: string,
+  gameId: string,
+  symbols: string[] | undefined
+): Record<string, string> {
+  const base = providerBaseUrl.replace(/\/$/, '')
+  const map: Record<string, string> = {}
 
-  // normalized grid: SymbolAsset[][] (3x5 rows/cols) -> convert to 5x3 keys from ids if possible
-  const g2 = raw?.grid
-  if (Array.isArray(g2) && Array.isArray(g2?.[0]) && g2.length === 3 && g2[0].length === 5) {
-    const out = empty5x3()
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 5; col++) {
-        const cell = g2[row][col]
-        const id = typeof cell?.id === 'string' ? cell.id : ''
-        // id often "A_0_0" => take part before first "_"
-        const key = id.includes('_') ? id.split('_')[0] : ''
-        out[col][row] = key
-      }
-    }
-    return out
+  const add = (key: string, url: string) => {
+    if (!key) return
+    if (!map[key]) map[key] = url
   }
 
-  return null
+  // from catalog (best source)
+  if (Array.isArray(symbols)) {
+    for (const s of symbols) {
+      if (typeof s !== 'string' || !s.trim()) continue
+      const abs = s.startsWith('http') ? s : `${base}${s.startsWith('/') ? '' : '/'}${s}`
+      const file = abs.split('/').pop() ?? ''
+      const key = file.replace(/\.png$/i, '').replace(/\.jpg$/i, '').replace(/\.jpeg$/i, '')
+      add(key, abs)
+    }
+  }
+
+  // always add fallback for common keys (if catalog missing)
+  const fallback = (k: string) => `${base}/assets/${gameId}/symbols/${encodeURIComponent(k)}.png`
+
+  ;['A', 'K', 'Q', 'J', '10', '9', 'W', 'S', 'wild', 'scatter'].forEach((k) => add(k, fallback(k)))
+
+  return map
 }
 
 export default function PlayClient() {
@@ -166,25 +121,19 @@ export default function PlayClient() {
     []
   )
 
+  const [catalog, setCatalog] = useState<Game[]>([])
+  const game = useMemo(() => catalog.find((g) => g.id === gameId) ?? null, [catalog, gameId])
+
   const [sessionId, setSessionId] = useState(sessionIdParam)
   const [launchUrl, setLaunchUrl] = useState('')
 
-  const [catalog, setCatalog] = useState<Game[]>([])
-  const game = useMemo(() => catalog.find((g) => g.id === gameId) || null, [catalog, gameId])
-
   const [grid, setGrid] = useState<string[][]>(() => empty5x3())
   const [wins, setWins] = useState<ProviderWin[]>([])
-  const [scatters, setScatters] = useState(0)
-  const [freeSpinsRemaining, setFreeSpinsRemaining] = useState(0)
 
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [balanceNumber, setBalanceNumber] = useState(0)
   const [win, setWin] = useState(0)
   const [bet, setBet] = useState(1)
-
-  const animBalance = useAnimatedNumber(balanceNumber, 350)
-  const animWin = useAnimatedNumber(win, 250)
-  const animFree = useAnimatedNumber(freeSpinsRemaining, 250)
 
   const [error, setError] = useState('')
   const [spinning, setSpinning] = useState(false)
@@ -192,16 +141,25 @@ export default function PlayClient() {
 
   const [showProvider, setShowProvider] = useState(false)
 
-  // bonus intro animation
-  const [bonusIntro, setBonusIntro] = useState(false)
-  const lastFreeRef = useRef(0)
+  // FREE SPINS via result.events
+  const [inFreeSpins, setInFreeSpins] = useState(false)
+  const [freeSpinsRemaining, setFreeSpinsRemaining] = useState(0)
+  const inFreeRef = useRef(false)
+  const freeRef = useRef(0)
 
-  // autoplay during free spins
-  const autoTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    inFreeRef.current = inFreeSpins
+  }, [inFreeSpins])
 
-  const inFreeSpins = freeSpinsRemaining > 0
+  useEffect(() => {
+    freeRef.current = freeSpinsRemaining
+  }, [freeSpinsRemaining])
 
-  // load catalog
+  const symbolMap = useMemo(() => {
+    return buildSymbolMap(PROVIDER_BASE_URL, gameId, game?.assets?.symbols)
+  }, [PROVIDER_BASE_URL, gameId, game?.assets?.symbols])
+
+  // Load catalog (needed for symbolMap)
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -210,7 +168,7 @@ export default function PlayClient() {
         const j: any = await r.json()
         if (!r.ok) throw new Error(j?.error || 'catalog error')
         if (!alive) return
-        const list: Game[] = Array.isArray(j) ? (j as Game[]) : (j?.games ?? [])
+        const list: Game[] = Array.isArray(j) ? j : Array.isArray(j?.games) ? j.games : []
         setCatalog(list)
       } catch (e: any) {
         if (alive) setError(e?.message ?? 'catalog error')
@@ -221,7 +179,7 @@ export default function PlayClient() {
     }
   }, [])
 
-  // ensure session
+  // Ensure session
   useEffect(() => {
     if (!gameId) return
 
@@ -267,8 +225,36 @@ export default function PlayClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameId])
 
-  async function doSpin(trigger: 'manual' | 'auto' = 'manual') {
-    if (!sessionId || !gameId) return
+  function applyFreeSpinsFromEvents(events: ProviderEvent[] | undefined) {
+    if (!Array.isArray(events)) return
+
+    for (const ev of events) {
+      const type = String(ev?.type ?? '')
+      if (type === 'FREE_SPINS_START') {
+        const total = Number((ev as any).total ?? (ev as any).freeSpins ?? 0)
+        if (Number.isFinite(total) && total > 0) {
+          setInFreeSpins(true)
+          setFreeSpinsRemaining(total)
+        }
+      }
+
+      if (type === 'FREE_SPINS_RETRIGGER') {
+        const remaining = Number((ev as any).remaining ?? 0)
+        if (Number.isFinite(remaining) && remaining >= 0) {
+          setInFreeSpins(true)
+          setFreeSpinsRemaining(remaining)
+        }
+      }
+
+      if (type === 'FREE_SPINS_END') {
+        setInFreeSpins(false)
+        setFreeSpinsRemaining(0)
+      }
+    }
+  }
+
+  async function doSpin() {
+    if (!sessionId) return
     if (inFlight.current) return
 
     inFlight.current = true
@@ -280,73 +266,43 @@ export default function PlayClient() {
     try {
       const betToSend = Math.max(1, Number(bet) || 1)
 
-      // ✅ IMPORTANT: during free spins, DO NOT send bet
-      const payload =
-        freeSpinsRemaining > 0
-          ? { sessionId, gameId }
-          : { sessionId, gameId, bet: betToSend }
-
       const res = await fetch('/api/play', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ sessionId, bet: betToSend })
       })
 
       const raw: any = await res.json()
-
       console.log('PLAY RAW RESPONSE:', raw)
-      console.log('GRID RAW:', raw?.result?.grid ?? raw?.grid)
+      console.log('GRID RAW:', raw?.result?.grid)
+      console.log('EVENTS RAW:', raw?.result?.events)
 
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
-      // wallet/balance: support both shapes
-      if (raw?.balance && typeof raw.balance === 'object') {
+      // wallet/balance
+      if (raw?.balance?.balance != null) {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal(raw.balance.balance))
-      } else if (raw?.wallet && typeof raw.wallet === 'object') {
-        setWallet(raw.wallet as Wallet)
-        setBalanceNumber(parseDecimal(raw.wallet.balance))
-      } else if (raw?.balance != null) {
-        setBalanceNumber(parseDecimal(raw.balance))
       }
 
       // grid
-      const g = extractProviderGrid5x3(raw)
-      if (g) {
-        setGrid(g)
-        const sc = countScattersFromGrid(g)
-        setScatters(sc)
-        console.log('SCATTER COUNT (normalized):', sc)
-      } else {
-        // keep last grid (avoid black screen)
-        setScatters(0)
-      }
+      const g = to5x3(raw?.result?.grid)
+      if (g) setGrid(g)
 
-      // wins (for payline highlight)
-      const winsRaw = raw?.result?.wins ?? raw?.wins ?? []
-      setWins(normalizeProviderWins(winsRaw))
+      // wins
+      setWins(normalizeWins(raw?.result?.wins))
 
       // win
-      setWin(parseDecimal(raw?.win ?? raw?.result?.win ?? 0))
+      setWin(parseDecimal(raw?.result?.win ?? 0))
 
-      // free spins remaining (robust paths)
-      const fsRaw =
-        raw?.freeSpinsRemaining ??
-        raw?.result?.freeSpinsRemaining ??
-        raw?.result?.freeSpins?.remaining ??
-        0
+      // free spins from events (the correct way)
+      applyFreeSpinsFromEvents(raw?.result?.events)
 
-      const fs =
-        typeof fsRaw === 'string' ? Number.parseInt(fsRaw, 10) : Number(fsRaw)
-      const fsSafe = Number.isFinite(fs) ? fs : 0
-
-      // bonus intro when entering free spins
-      if (lastFreeRef.current === 0 && fsSafe > 0) {
-        setBonusIntro(true)
-        window.setTimeout(() => setBonusIntro(false), 1400)
+      // decrement remaining AFTER a FREE SPIN spin happened (client side)
+      // If provider does not give remaining each time, we keep UI counter accurate.
+      if (inFreeRef.current && freeRef.current > 0) {
+        setFreeSpinsRemaining((prev) => Math.max(0, prev - 1))
       }
-      lastFreeRef.current = fsSafe
-      setFreeSpinsRemaining(fsSafe)
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
     } finally {
@@ -357,29 +313,16 @@ export default function PlayClient() {
     }
   }
 
-  // 🎰 AUTO-PLAY during free spins (runs until 0)
+  // Auto-play during free spins
   useEffect(() => {
-    if (autoTimerRef.current) {
-      window.clearTimeout(autoTimerRef.current)
-      autoTimerRef.current = null
-    }
+    if (!inFreeSpins) return
+    if (spinning) return
+    if (freeSpinsRemaining <= 0) return
 
-    if (freeSpinsRemaining > 0 && !spinning && !inFlight.current) {
-      autoTimerRef.current = window.setTimeout(() => {
-        doSpin('auto')
-      }, 520)
-    }
-
-    return () => {
-      if (autoTimerRef.current) {
-        window.clearTimeout(autoTimerRef.current)
-        autoTimerRef.current = null
-      }
-    }
+    const t = window.setTimeout(() => doSpin(), 650)
+    return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeSpinsRemaining, spinning])
-
-  const headerTitle = game?.name ?? gameId
+  }, [inFreeSpins, freeSpinsRemaining, spinning])
 
   return (
     <div className="pb-36">
@@ -391,15 +334,9 @@ export default function PlayClient() {
 
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <div className="text-lg font-extrabold">{headerTitle}</div>
+          <div className="text-lg font-extrabold">{game?.name ?? gameId}</div>
           <div className="text-xs text-white/60">
-            {wallet?.currency ?? 'BRL'} • Balance:{' '}
-            {(Number.isFinite(animBalance) ? animBalance : balanceNumber).toFixed(2)}
-            {inFreeSpins ? (
-              <span className="ml-2 font-extrabold text-amber-200">
-                FREE SPINS: {Math.max(0, Math.round(animFree))}
-              </span>
-            ) : null}
+            {wallet?.currency ?? 'BRL'} • Balance: {balanceNumber.toFixed(2)}
           </div>
         </div>
 
@@ -412,78 +349,37 @@ export default function PlayClient() {
         </button>
       </div>
 
-      {/* GRID WRAPPER WITH OVERLAYS */}
-      <div className="relative">
-        {/* 🟣 FREE SPINS MODE overlay badge */}
-        {inFreeSpins ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2">
-            <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100 shadow-[0_0_30px_rgba(245,158,11,0.35)]">
-              FREE SPINS MODE • {freeSpinsRemaining} LEFT
-            </div>
+      {/* FREE SPINS MODE overlay */}
+      {inFreeSpins ? (
+        <div className="pointer-events-none mb-3 flex justify-center">
+          <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100">
+            FREE SPINS MODE • {freeSpinsRemaining} LEFT
           </div>
-        ) : null}
+        </div>
+      ) : null}
 
-        {/* ✨ BONUS INTRO animation */}
-        {bonusIntro ? (
-          <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-3xl bg-gradient-to-b from-amber-500/25 via-purple-500/15 to-black/40 backdrop-blur-[1px] animate-[fadeInOut_1.4s_ease-in-out_forwards]" />
-            <div className="relative z-10 text-center">
-              <div className="text-[clamp(22px,4vw,42px)] font-black tracking-tight text-white drop-shadow-[0_0_30px_rgba(245,158,11,0.35)]">
-                BONUS TRIGGERED
-              </div>
-              <div className="mt-2 text-[clamp(12px,2.2vw,16px)] font-bold text-amber-100/90">
-                FREE SPINS ACTIVATED
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <SlotGrid
-          grid={grid}
-          spinning={spinning}
-          symbolMap={{}}
-          wins={wins}
-          scattersCount={scatters}
-          freeSpinsRemaining={freeSpinsRemaining}
-          providerBaseUrl={PROVIDER_BASE_URL}
-          gameId={gameId}
-        />
-      </div>
+      <SlotGrid
+        grid={grid}
+        spinning={spinning}
+        symbolMap={symbolMap}          // ✅ FIX: required prop
+        wins={wins}
+        providerBaseUrl={PROVIDER_BASE_URL}
+        gameId={gameId}
+        freeSpinsRemaining={freeSpinsRemaining}
+      />
 
       <SpinPanel
-        balance={Number.isFinite(animBalance) ? animBalance : balanceNumber}
-        win={Number.isFinite(animWin) ? animWin : win}
+        balance={balanceNumber}
+        win={win}
         bet={bet}
         setBet={setBet}
-        onSpin={() => doSpin('manual')}
-        // ✅ pendant free spins on peut désactiver manuellement (auto-play)
+        onSpin={doSpin}
         spinning={spinning || inFreeSpins}
       />
 
       {showProvider && launchUrl ? (
         <ProviderLaunchFrame launchUrl={launchUrl} onClose={() => setShowProvider(false)} />
       ) : null}
-
-      <style jsx global>{`
-        @keyframes fadeInOut {
-          0% {
-            opacity: 0;
-            transform: scale(0.98);
-          }
-          12% {
-            opacity: 1;
-            transform: scale(1);
-          }
-          70% {
-            opacity: 1;
-            transform: scale(1);
-          }
-          100% {
-            opacity: 0;
-            transform: scale(1.02);
-          }
-        }
-      `}</style>
     </div>
   )
 }
