@@ -54,44 +54,62 @@ function to5x3(raw: any): string[][] | null {
   return null
 }
 
-// ✅ Normalize symbol key (trim + uppercase)
-function normKey(v: any): string {
+// ✅ Normalize symbol key (trim + uppercase compare)
+function norm(v: any): string {
   return String(v ?? '').trim()
 }
 
-// ✅ Scatter detector tolerant
 function isScatterKey(key: string): boolean {
-  const k = key.trim()
-  if (!k) return false
-  const u = k.toUpperCase()
-  return u === 'S' || u === 'SC' || u === 'SCATTER' || u === 'SCATTERSYMBOL'
+  const u = key.trim().toUpperCase()
+  return u === 'S' || u === 'SC' || u === 'SCATTER'
 }
 
 function countScatters(grid5x3: string[][]): number {
   let c = 0
   for (let reel = 0; reel < 5; reel++) {
     for (let row = 0; row < 3; row++) {
-      if (isScatterKey(normKey(grid5x3?.[reel]?.[row]))) c++
+      if (isScatterKey(norm(grid5x3?.[reel]?.[row]))) c++
     }
   }
   return c
 }
 
-// Your rule: 3 scatters => 8 FS (only)
-function freeSpinReward(scatterCount: number): number {
+// Your rule: 3 scatters => 8 FS
+function rewardFromScatters(scatterCount: number): number {
   return scatterCount >= 3 ? 8 : 0
 }
 
-// UI-side payline win detection (wild=W)
+// ✅ Provider may return free spins in different fields → we extract safely.
+function extractFreeSpinsLeft(raw: any): number {
+  const candidates = [
+    raw?.freeSpinsLeft,
+    raw?.result?.freeSpinsLeft,
+    raw?.result?.freeSpins?.left,
+    raw?.result?.freeSpins?.remaining,
+    raw?.bonus?.freeSpinsLeft,
+    raw?.bonus?.freeSpins?.left,
+    raw?.feature?.freeSpinsLeft
+  ]
+
+  for (const v of candidates) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string') {
+      const n = Number.parseInt(v, 10)
+      if (Number.isFinite(n)) return n
+    }
+  }
+  return 0
+}
+
+// UI-side payline win detection (wild=W, scatter breaks)
 function detectWinningLines(grid5x3: string[][]): number[] {
   const wins: number[] = []
   const WILD = 'W'
 
   for (let i = 0; i < PAYLINES_20.length; i++) {
     const line = PAYLINES_20[i]
-    const seq = line.map((row, reel) => normKey(grid5x3?.[reel]?.[row]))
+    const seq = line.map((row, reel) => norm(grid5x3?.[reel]?.[row]))
 
-    // base symbol = first non-wild, non-scatter
     let base = ''
     for (let r = 0; r < seq.length; r++) {
       const s = seq[r]
@@ -114,6 +132,7 @@ function detectWinningLines(grid5x3: string[][]): number[] {
       if (u === b || u === WILD) count++
       else break
     }
+
     if (count >= 3) wins.push(i)
   }
 
@@ -145,15 +164,20 @@ export default function PlayClient() {
   const [spinning, setSpinning] = useState(false)
   const inFlightRef = useRef(false)
 
+  // paylines only on gains
   const [winningLines, setWinningLines] = useState<number[]>([])
 
-  const [freeSpinsLeft, setFreeSpinsLeft] = useState<number>(0)
+  // ✅ provider-driven free spins (source of truth)
+  const [providerFreeSpinsLeft, setProviderFreeSpinsLeft] = useState<number>(0)
+
+  // ✅ popup when scatters >= 3 (UI message)
   const [showFreeSpinPopup, setShowFreeSpinPopup] = useState(false)
 
+  // provider view
   const [showProvider, setShowProvider] = useState(false)
 
+  // 🔊 hook for sounds (you implement)
   const onSound = (e: SoundEvent) => {
-    // plug your audio here
     // console.log('SOUND', e)
   }
 
@@ -180,6 +204,7 @@ export default function PlayClient() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ gameCode: gameId, playerExternalId: 'player_demo_123', currency: 'BRL' })
         })
+
         const json = await res.json()
         if (!res.ok) throw new Error(json?.error || 'Session error')
         if (!alive) return
@@ -217,10 +242,13 @@ export default function PlayClient() {
     onSound({ type: 'spin' })
 
     try {
+      // ✅ IMPORTANT: do NOT send bet=0 (causait 400)
+      const betToSend = Math.max(1, Number(bet) || 1)
+
       const res = await fetch('/api/play', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, bet: freeSpinsLeft > 0 ? 0 : bet })
+        body: JSON.stringify({ sessionId, bet: betToSend })
       })
 
       const raw = await res.json()
@@ -229,31 +257,40 @@ export default function PlayClient() {
 
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
+      // wallet
       if (raw?.balance && typeof raw.balance === 'object') {
         setWallet(raw.balance as Wallet)
         setBalanceNumber(parseDecimal((raw.balance as Wallet).balance))
       }
 
+      // provider free spins (source of truth)
+      const fsLeft = extractFreeSpinsLeft(raw)
+      if (fsLeft >= 0) setProviderFreeSpinsLeft(fsLeft)
+
+      // grid
       const g = to5x3(raw?.result?.grid)
       if (g) {
         setGrid(g)
 
-        const scatters = countScatters(g)
-        console.log('SCATTER COUNT (normalized):', scatters)
-
-        const reward = freeSpinReward(scatters)
-        if (reward > 0) {
-          onSound({ type: 'bonus' })
-          setFreeSpinsLeft((prev) => prev + reward)
-          setShowFreeSpinPopup(true)
-          setTimeout(() => setShowFreeSpinPopup(false), 1800)
-        }
-
+        // paylines only on win
         const wins = detectWinningLines(g)
         setWinningLines(wins)
         if (wins.length > 0) onSound({ type: 'win' })
+
+        // scatter bonus popup (UI signal)
+        const scatters = countScatters(g)
+        console.log('SCATTER COUNT (normalized):', scatters)
+
+        const reward = rewardFromScatters(scatters)
+        if (reward > 0) {
+          // NOTE: reward display only. Provider should manage real FS mode.
+          onSound({ type: 'bonus' })
+          setShowFreeSpinPopup(true)
+          setTimeout(() => setShowFreeSpinPopup(false), 1800)
+        }
       }
 
+      // win from provider (normalized)
       const normalized = normalizePlayResponse(raw, { gameId, providerBaseUrl: PROVIDER_BASE_URL })
       setWin(normalized.win)
     } catch (e: any) {
@@ -262,22 +299,24 @@ export default function PlayClient() {
       setTimeout(() => {
         setSpinning(false)
         inFlightRef.current = false
-        if (freeSpinsLeft > 0) setFreeSpinsLeft((prev) => Math.max(0, prev - 1))
       }, 650)
     }
   }
 
-  // auto-run free spins
+  // ✅ Auto-run ONLY if provider says free spins left > 0
   useEffect(() => {
     if (!sessionId) return
-    if (freeSpinsLeft <= 0) return
+    if (providerFreeSpinsLeft <= 0) return
     if (spinning) return
     if (inFlightRef.current) return
 
-    const t = setTimeout(() => doSpin(), 420)
+    const t = setTimeout(() => {
+      doSpin()
+    }, 420)
+
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeSpinsLeft, sessionId, spinning])
+  }, [providerFreeSpinsLeft, sessionId, spinning])
 
   return (
     <div className="pb-32 relative">
@@ -301,7 +340,9 @@ export default function PlayClient() {
           <div className="text-lg font-extrabold tracking-tight">{gameId || 'play'}</div>
           <div className="mt-1 text-xs text-white/60">
             Session: {sessionId ? 'LIVE' : '...'} • {wallet?.currency ?? 'BRL'}
-            {freeSpinsLeft > 0 ? <span className="ml-2 text-amber-200 font-bold">FS: {freeSpinsLeft}</span> : null}
+            {providerFreeSpinsLeft > 0 ? (
+              <span className="ml-2 text-amber-200 font-bold">FREE SPINS: {providerFreeSpinsLeft}</span>
+            ) : null}
           </div>
         </div>
 
@@ -328,7 +369,7 @@ export default function PlayClient() {
         bet={bet}
         setBet={setBet}
         onSpin={doSpin}
-        spinning={spinning || freeSpinsLeft > 0}
+        spinning={spinning}
       />
 
       {showProvider && launchUrl ? (
