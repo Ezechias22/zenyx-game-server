@@ -1,68 +1,66 @@
 'use client'
 
-import { PAYLINES_20 } from '@/constants/paylines'
+import React, { useMemo } from 'react'
+
+export type WinPosition = { reel: number; row: number }
+export type ProviderWin = {
+  // le provider peut renvoyer d’autres champs, on ne dépend que de positions
+  positions: WinPosition[]
+  // optionnel
+  amount?: string | number
+  lineIndex?: number
+}
 
 type Props = {
-  winningLines: number[] // indices
+  wins: ProviderWin[]
+  // taille logique: 1000x600, 5 reels, 3 rows
+  showAll?: boolean // si tu veux un toggle plus tard
 }
 
-const W = 1000
-const H = 600
-
-function pointsFor(line: number[]): string {
-  // centers
-  return line
-    .map((row, i) => {
-      const x = ((i + 0.5) / 5) * W
-      const y = ((row + 0.5) / 3) * H
-      return `${x},${y}`
-    })
-    .join(' ')
+function pointFor(pos: WinPosition) {
+  const x = (pos.reel / 4) * 1000
+  const y = (pos.row / 2) * 600
+  return `${x},${y}`
 }
 
-export default function PaylineOverlay({ winningLines }: Props) {
-  if (!winningLines || winningLines.length === 0) return null
+export default function PaylineOverlay({ wins }: Props) {
+  const polylines = useMemo(() => {
+    if (!Array.isArray(wins) || wins.length === 0) return []
+    return wins
+      .map((w) => (Array.isArray(w?.positions) ? w.positions : []))
+      .filter((p) => p.length >= 2) // une ligne a au moins 2 points
+      .map((positions) => positions.map(pointFor).join(' '))
+  }, [wins])
+
+  if (polylines.length === 0) return null
 
   return (
     <svg
-      className="absolute inset-0 z-20 pointer-events-none"
-      viewBox={`0 0 ${W} ${H}`}
+      className="pointer-events-none absolute inset-0 z-20"
+      viewBox="0 0 1000 600"
       preserveAspectRatio="none"
     >
-      <defs>
-        <filter id="glowGreen" x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="7" result="b" />
-          <feMerge>
-            <feMergeNode in="b" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-
-        <style>{`
-          .zenyx-draw {
-            stroke-dasharray: 2400;
-            stroke-dashoffset: 2400;
-            animation: zenyxDraw 360ms ease forwards;
-          }
-          @keyframes zenyxDraw {
-            to { stroke-dashoffset: 0; }
-          }
-        `}</style>
-      </defs>
-
-      {winningLines.map((idx) => (
-        <polyline
-          key={idx}
-          className="zenyx-draw"
-          points={pointsFor(PAYLINES_20[idx])}
-          fill="none"
-          stroke="rgba(34,197,94,0.95)"
-          strokeWidth={9}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          filter="url(#glowGreen)"
-          opacity={1}
-        />
+      {polylines.map((pts, i) => (
+        <g key={i}>
+          {/* glow */}
+          <polyline
+            points={pts}
+            fill="none"
+            stroke="rgba(255,215,0,0.28)"
+            strokeWidth="18"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {/* core */}
+          <polyline
+            points={pts}
+            fill="none"
+            stroke="rgba(255,215,0,0.85)"
+            strokeWidth="6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </g>
       ))}
     </svg>
   )
