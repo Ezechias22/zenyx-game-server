@@ -1,176 +1,285 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import PaylineOverlay, { ProviderWin } from '@/components/PaylineOverlay'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-type Props = {
-  grid: string[][] // provider: [reel][row] => 5x3
-  spinning: boolean
-  symbolMap: Record<string, string> // from catalog assets.symbols (best-effort)
-  wins: ProviderWin[]
-  scattersCount?: number
-  freeSpinsRemaining?: number
+export type SymbolMap = Record<string, string>
 
-  // ✅ needed for fallback url building
-  providerBaseUrl: string
-  gameId: string
+export type ProviderWin = {
+  positions: Array<{ reel: number; row: number }>
 }
 
-function clamp5x3(grid: string[][]): string[][] {
-  const out = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
+type Props = {
+  grid: string[][] // 5x3 => grid[reel][row]
+  spinning: boolean
+  providerBaseUrl: string
+  gameId: string
+  symbolMap: SymbolMap
+  wins: ProviderWin[]
+  fsActive: boolean
+  fsRemaining: number
+  onWinLineChange?: (index: number) => void
+}
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n))
+}
+
+function keyOf(cell: string): string {
+  return String(cell ?? '').trim()
+}
+
+function to3x5(grid5x3: string[][]): string[][] {
+  const out: string[][] = Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => ''))
   for (let reel = 0; reel < 5; reel++) {
     for (let row = 0; row < 3; row++) {
-      out[reel][row] = grid?.[reel]?.[row] ?? ''
+      out[row][reel] = keyOf(grid5x3?.[reel]?.[row] ?? '')
     }
   }
   return out
 }
 
-function normKey(v: unknown) {
-  return String(v ?? '').trim()
+function getAssetUrl(base: string, gameId: string, symbolKey: string, symbolMap: SymbolMap): string {
+  const key = keyOf(symbolKey)
+  if (!key) return ''
+
+  // 1) symbolMap (catalog) - le plus fiable (gère wild.png vs W.png)
+  const direct = symbolMap[key]
+  if (direct) return direct
+
+  // 2) fallback standard
+  const b = base.replace(/\/$/, '')
+  return `${b}/assets/${gameId}/symbols/${encodeURIComponent(key)}.png`
 }
 
-function buildCandidates(base: string, gameId: string, keyRaw: string): string[] {
-  const b = base.replace(/\/$/, '')
-  const key = normKey(keyRaw)
-  if (!key) return []
-
-  const lower = key.toLowerCase()
-  const upper = key.toUpperCase()
-
-  // provider can have either "W.png" or "wild.png", "S.png" or "scatter.png"
-  const wildAliases = key === 'W' || lower === 'wild' ? ['W', 'wild'] : []
-  const scatterAliases = key === 'S' || lower === 'scatter' ? ['S', 'scatter'] : []
-
-  const variants = Array.from(
-    new Set([key, lower, upper, ...wildAliases, ...scatterAliases])
-  )
-
-  return variants.map((k) => `${b}/assets/${gameId}/symbols/${k}.png`)
+function winPositionsToPolyline(win: ProviderWin) {
+  // viewBox 1000x600, reels=5, rows=3
+  // x = i/4 *1000, y = row/2 *600
+  const pts = win.positions
+    .slice()
+    .sort((a, b) => a.reel - b.reel)
+    .map((p) => {
+      const reel = clamp(p.reel, 0, 4)
+      const row = clamp(p.row, 0, 2)
+      const x = (reel / 4) * 1000
+      const y = (row / 2) * 600
+      return `${x},${y}`
+    })
+    .join(' ')
+  return pts
 }
 
 export default function SlotGrid({
   grid,
   spinning,
+  providerBaseUrl,
+  gameId,
   symbolMap,
   wins,
-  scattersCount = 0,
-  freeSpinsRemaining = 0,
-  providerBaseUrl,
-  gameId
+  fsActive,
+  fsRemaining,
+  onWinLineChange
 }: Props) {
-  const g = useMemo(() => clamp5x3(grid), [grid])
+  const rows3x5 = useMemo(() => to3x5(grid), [grid])
 
-  // cache: key -> resolvedUrl (or empty string if not found)
-  const resolvedRef = useRef<Record<string, string>>({})
-  const [tick, setTick] = useState(0) // trigger re-render when cache updates
+  // only winning lines from provider (wins)
+  const winLines = useMemo(() => wins.filter((w) => w.positions?.length >= 2), [wins])
 
-  // pre-resolve visible keys on grid (fast, no fetch, just candidate priority)
+  const [selectedWinIdx, setSelectedWinIdx] = useState(0)
+  const cycleRef = useRef<number | null>(null)
+
+  // when new wins arrive -> reset and start cycling
   useEffect(() => {
-    const next: Record<string, string> = { ...resolvedRef.current }
-    let changed = false
+    setSelectedWinIdx(0)
+    if (cycleRef.current) {
+      window.clearInterval(cycleRef.current)
+      cycleRef.current = null
+    }
 
-    for (let reel = 0; reel < 5; reel++) {
-      for (let row = 0; row < 3; row++) {
-        const key = normKey(g[reel][row])
-        if (!key) continue
-        if (next[key] !== undefined) continue
+    if (winLines.length <= 1) return
 
-        // 1) try from symbolMap (catalog)
-        const mapHit =
-          symbolMap[key] ??
-          symbolMap[key.toLowerCase()] ??
-          symbolMap[key.toUpperCase()]
+    // auto-cycle only on winning lines
+    cycleRef.current = window.setInterval(() => {
+      setSelectedWinIdx((x) => (x + 1) % winLines.length)
+    }, 900)
 
-        if (mapHit) {
-          next[key] = mapHit
-          changed = true
-          continue
-        }
-
-        // 2) fallback to provider convention (no hardcode: just candidate urls)
-        const candidates = buildCandidates(providerBaseUrl, gameId, key)
-        next[key] = candidates[0] ?? '' // start with first candidate; onError we rotate
-        changed = true
+    return () => {
+      if (cycleRef.current) {
+        window.clearInterval(cycleRef.current)
+        cycleRef.current = null
       }
     }
+  }, [winLines.length])
 
-    if (changed) {
-      resolvedRef.current = next
-      setTick((t) => t + 1)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [g, symbolMap, providerBaseUrl, gameId])
+  useEffect(() => {
+    onWinLineChange?.(selectedWinIdx)
+  }, [selectedWinIdx, onWinLineChange])
 
-  const hasWins = wins?.length > 0
-  const hasBonus = freeSpinsRemaining > 0 || scattersCount >= 3
+  const activeWin = winLines[selectedWinIdx] || null
+
+  // highlight set of winning positions (for glow)
+  const activePosKey = useMemo(() => {
+    const s = new Set<string>()
+    if (!activeWin) return s
+    for (const p of activeWin.positions) s.add(`${p.reel}:${p.row}`)
+    return s
+  }, [activeWin])
+
+  const polylinePoints = activeWin ? winPositionsToPolyline(activeWin) : ''
 
   return (
-    <div className="mx-auto w-full max-w-[min(96vw,900px)]">
-      <div className="relative">
-        <div className="rounded-2xl border border-white/10 bg-black/40 p-[clamp(10px,2vw,16px)]">
-          <div className="relative">
-            {hasBonus ? (
-              <div className="absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100 shadow-[0_0_25px_rgba(245,158,11,0.35)]">
-                {freeSpinsRemaining > 0
-                  ? `FREE SPINS • ${freeSpinsRemaining} LEFT`
-                  : `SCATTER ×${scattersCount}`}
-              </div>
-            ) : null}
+    <div className="mx-auto w-full">
+      {/* Responsive wrapper: mobile first */}
+      <div className="mx-auto w-full max-w-[760px]">
+        <div className="relative rounded-3xl border border-white/10 bg-white/5 p-3 md:p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+          {/* GRID */}
+          <div className="grid grid-cols-5 gap-2 md:gap-3">
+            {rows3x5.map((rowArr, r) =>
+              rowArr.map((sym, c) => {
+                const reel = c
+                const row = r
+                const posKey = `${reel}:${row}`
+                const isActive = activePosKey.has(posKey)
+                const src = getAssetUrl(providerBaseUrl, gameId, sym, symbolMap)
 
-            <div className="grid grid-cols-5 gap-[clamp(8px,1.4vw,12px)]">
-              {Array.from({ length: 5 }).map((_, reel) => (
-                <div key={`reel_${reel}`} className="grid grid-rows-3 gap-[clamp(8px,1.4vw,12px)]">
-                  {Array.from({ length: 3 }).map((_, row) => {
-                    const key = normKey(g[reel][row])
-                    const url = key ? resolvedRef.current[key] : ''
+                return (
+                  <div
+                    key={`${r}_${c}_${sym}`}
+                    className={[
+                      'relative aspect-square overflow-hidden rounded-2xl border bg-black/20',
+                      'border-white/10',
+                      isActive ? 'ring-2 ring-emerald-300/60 shadow-[0_0_35px_rgba(16,185,129,0.28)]' : '',
+                      spinning ? 'animate-[cellPulse_0.22s_ease-in-out_infinite]' : ''
+                    ].join(' ')}
+                  >
+                    {/* spin animation layer */}
+                    <div
+                      className={[
+                        'absolute inset-0',
+                        spinning ? 'animate-[reelBlur_0.25s_ease-in-out_infinite]' : ''
+                      ].join(' ')}
+                    />
 
-                    return (
-                      <div
-                        key={`cell_${reel}_${row}`}
-                        className={`relative aspect-square overflow-hidden rounded-[clamp(12px,1.6vw,18px)] border bg-black/35 flex items-center justify-center transition-all duration-150 ${
-                          hasWins ? 'border-white/12' : 'border-white/10'
-                        }`}
-                      >
-                        {url ? (
-                          <img
-                            key={`${key}_${tick}`} // re-render when cache changes
-                            src={url}
-                            alt={key}
-                            className={`h-[82%] w-[82%] object-contain transition-all duration-150 ${
-                              spinning ? 'scale-95 blur-[1.5px] opacity-90' : 'scale-100'
-                            }`}
-                            draggable={false}
-                            loading="eager"
-                            decoding="async"
-                            onError={() => {
-                              // rotate candidates if first fails
-                              const candidates = buildCandidates(providerBaseUrl, gameId, key)
-                              const current = resolvedRef.current[key]
-                              const idx = candidates.findIndex((c) => c === current)
-                              const nextUrl = candidates[idx + 1] ?? '' // if none -> ''
-                              resolvedRef.current = { ...resolvedRef.current, [key]: nextUrl }
-                              setTick((t) => t + 1)
-                            }}
-                          />
-                        ) : (
-                          <div className="px-2 text-center text-[10px] font-bold text-white/30 leading-tight">
-                            MISSING
-                            <div className="text-white/25">{key || '-'}</div>
-                          </div>
-                        )}
+                    {src ? (
+                      <img
+                        src={src}
+                        alt={sym}
+                        className={[
+                          'relative z-10 h-full w-full object-contain p-2 md:p-3',
+                          spinning ? 'opacity-90 blur-[0.6px]' : 'opacity-100'
+                        ].join(' ')}
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="relative z-10 flex h-full w-full items-center justify-center text-[10px] font-bold text-white/45">
+                        {sym || '—'}
                       </div>
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
 
-            {/* ✅ draw only provider wins */}
-            <PaylineOverlay wins={wins || []} />
+          {/* PAYLINE OVERLAY (only when there is a win line) */}
+          {activeWin ? (
+            <div className="pointer-events-none absolute inset-0 z-30">
+              <svg
+                viewBox="0 0 1000 600"
+                preserveAspectRatio="none"
+                className="h-full w-full"
+              >
+                {/* glow under */}
+                <polyline
+                  points={polylinePoints}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.18)"
+                  strokeWidth="14"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+
+                {/* main line (draw effect) */}
+                <polyline
+                  className="payline-draw"
+                  points={polylinePoints}
+                  fill="none"
+                  stroke="rgba(52,211,153,0.95)"
+                  strokeWidth="7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+
+                {/* flash */}
+                <polyline
+                  className="payline-flash"
+                  points={polylinePoints}
+                  fill="none"
+                  stroke="rgba(245,158,11,0.95)"
+                  strokeWidth="5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+          ) : null}
+
+          {/* bottom small HUD (wins only) */}
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs text-white/60">
+            <div className="font-semibold">
+              {winLines.length > 0 ? `WIN LINES: ${winLines.length}` : 'NO WIN'}
+            </div>
+            <div className="flex items-center gap-2">
+              {fsActive ? (
+                <span className="rounded-full border border-amber-300/25 bg-amber-500/10 px-2 py-1 font-extrabold text-amber-100">
+                  FREE SPINS • {fsRemaining}
+                </span>
+              ) : null}
+              {winLines.length > 1 ? (
+                <span className="rounded-full border border-emerald-300/25 bg-emerald-500/10 px-2 py-1 font-extrabold text-emerald-100">
+                  LINE {selectedWinIdx + 1}
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        @keyframes reelBlur {
+          0% { opacity: 0.08; backdrop-filter: blur(0px); }
+          50% { opacity: 0.16; backdrop-filter: blur(2px); }
+          100% { opacity: 0.08; backdrop-filter: blur(0px); }
+        }
+        @keyframes cellPulse {
+          0% { transform: translateY(0px); }
+          50% { transform: translateY(-1px); }
+          100% { transform: translateY(0px); }
+        }
+
+        /* Payline draw */
+        .payline-draw {
+          stroke-dasharray: 1200;
+          stroke-dashoffset: 1200;
+          animation: paylineDraw 420ms ease-out forwards;
+          filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.45));
+        }
+        @keyframes paylineDraw {
+          to { stroke-dashoffset: 0; }
+        }
+
+        /* Flash */
+        .payline-flash {
+          opacity: 0;
+          animation: paylineFlash 720ms ease-in-out infinite;
+          filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.55));
+        }
+        @keyframes paylineFlash {
+          0% { opacity: 0; }
+          20% { opacity: 0.95; }
+          55% { opacity: 0; }
+          100% { opacity: 0; }
+        }
+      `}</style>
     </div>
   )
 }
