@@ -53,6 +53,7 @@ export default function SpinPanel({
     >
       <div className="mx-auto w-full max-w-[1400px] px-3 py-3">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          {/* Left cards */}
           <div className="grid grid-cols-3 gap-2 md:flex md:gap-3">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
               <div className="text-[11px] text-white/50">Balance</div>
@@ -78,7 +79,9 @@ export default function SpinPanel({
                 >
                   –
                 </button>
+
                 <div className="min-w-[56px] text-center text-sm font-extrabold">{bet.toFixed(2)}</div>
+
                 <button
                   onClick={inc}
                   disabled={spinning || fsLocked}
@@ -89,34 +92,18 @@ export default function SpinPanel({
               </div>
 
               {fsLocked ? (
-                <div className="mt-2 text-[10px] font-semibold text-amber-200/80">
-                  Bet locked (FREE SPINS)
-                </div>
+                <div className="mt-2 text-[10px] font-semibold text-amber-200/80">Bet locked (FREE SPINS)</div>
               ) : null}
             </div>
           </div>
 
-          <div className="grid w-full grid-cols-3 gap-2 md:w-auto md:grid-cols-none md:flex md:gap-3">
-            <button
-              onClick={onBuyFreeSpins}
-              disabled={spinning || fsLocked}
-              className="h-12 w-full rounded-2xl border border-amber-300/25 bg-amber-500/10 text-xs font-extrabold text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 md:w-[180px]"
-            >
-              BUY FREE SPINS
-            </button>
-
-            <button
-              onClick={onOpenGamble}
-              disabled={!canGamble}
-              className="h-12 w-full rounded-2xl border border-emerald-300/25 bg-emerald-500/10 text-xs font-extrabold text-emerald-100 hover:bg-emerald-500/15 disabled:opacity-50 md:w-[140px]"
-            >
-              GAMBLE
-            </button>
-
+          {/* Right controls */}
+          <div className="w-full md:w-auto">
+            {/* ✅ Mobile: SPIN full width */}
             <button
               onClick={spin}
               disabled={spinning}
-              className={`h-12 w-full rounded-2xl font-extrabold tracking-wide transition-all duration-200 md:w-[min(46vw,320px)] ${
+              className={`h-12 w-full rounded-2xl font-extrabold tracking-wide transition-all duration-200 ${
                 spinning ? 'cursor-not-allowed opacity-70' : 'hover:scale-[1.02] active:scale-[0.99]'
               }`}
               style={{
@@ -125,6 +112,57 @@ export default function SpinPanel({
             >
               {spinning ? 'SPINNING…' : 'SPIN'}
             </button>
+
+            {/* ✅ Mobile: two small buttons under SPIN */}
+            <div className="mt-2 grid grid-cols-2 gap-2 md:hidden">
+              <button
+                onClick={onBuyFreeSpins}
+                disabled={spinning || fsLocked}
+                className="h-11 w-full rounded-2xl border border-amber-300/25 bg-amber-500/10 text-xs font-extrabold text-amber-100 hover:bg-amber-500/15 disabled:opacity-50"
+              >
+                BUY FREE SPINS
+              </button>
+
+              <button
+                onClick={onOpenGamble}
+                disabled={!canGamble}
+                className="h-11 w-full rounded-2xl border border-emerald-300/25 bg-emerald-500/10 text-xs font-extrabold text-emerald-100 hover:bg-emerald-500/15 disabled:opacity-50"
+              >
+                GAMBLE
+              </button>
+            </div>
+
+            {/* ✅ Desktop: inline buttons next to SPIN */}
+            <div className="hidden md:flex md:items-center md:gap-3">
+              <button
+                onClick={onBuyFreeSpins}
+                disabled={spinning || fsLocked}
+                className="h-12 rounded-2xl border border-amber-300/25 bg-amber-500/10 px-5 text-xs font-extrabold text-amber-100 hover:bg-amber-500/15 disabled:opacity-50"
+              >
+                BUY FREE SPINS
+              </button>
+
+              <button
+                onClick={onOpenGamble}
+                disabled={!canGamble}
+                className="h-12 rounded-2xl border border-emerald-300/25 bg-emerald-500/10 px-5 text-xs font-extrabold text-emerald-100 hover:bg-emerald-500/15 disabled:opacity-50"
+              >
+                GAMBLE
+              </button>
+
+              <button
+                onClick={spin}
+                disabled={spinning}
+                className={`h-12 rounded-2xl px-7 font-extrabold tracking-wide transition-all duration-200 ${
+                  spinning ? 'cursor-not-allowed opacity-70' : 'hover:scale-[1.02] active:scale-[0.99]'
+                }`}
+                style={{
+                  background: 'linear-gradient(90deg, rgba(34,211,238,1) 0%, rgba(139,92,246,1) 100%)'
+                }}
+              >
+                {spinning ? 'SPINNING…' : 'SPIN'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
