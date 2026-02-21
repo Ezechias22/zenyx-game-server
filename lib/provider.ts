@@ -30,9 +30,7 @@ async function providerFetch<T>({ method = 'GET', path, body }: ProviderCallOpti
   let json: any = null
   try {
     json = text ? JSON.parse(text) : null
-  } catch {
-    // provider should return JSON
-  }
+  } catch {}
 
   if (!res.ok) {
     const msg = json?.message || json?.error || json?.error?.message || `Provider error ${res.status}`
@@ -59,8 +57,7 @@ export function providerCreateSession(input: {
   })
 }
 
-// ✅ bet devient optionnel (free spins)
-export function providerPlay(input: { sessionId: string; bet?: number }) {
+export function providerPlay(input: { sessionId: string; bet: number; buyFreeSpins?: boolean }) {
   return providerFetch<any>({
     method: 'POST',
     path: '/v1/public/play',

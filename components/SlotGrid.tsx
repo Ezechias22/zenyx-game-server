@@ -41,19 +41,13 @@ function to3x5(grid5x3: string[][]): string[][] {
 function getAssetUrl(base: string, gameId: string, symbolKey: string, symbolMap: SymbolMap): string {
   const key = keyOf(symbolKey)
   if (!key) return ''
-
-  // 1) symbolMap (catalog) - le plus fiable (gère wild.png vs W.png)
   const direct = symbolMap[key]
   if (direct) return direct
-
-  // 2) fallback standard
   const b = base.replace(/\/$/, '')
   return `${b}/assets/${gameId}/symbols/${encodeURIComponent(key)}.png`
 }
 
 function winPositionsToPolyline(win: ProviderWin) {
-  // viewBox 1000x600, reels=5, rows=3
-  // x = i/4 *1000, y = row/2 *600
   const pts = win.positions
     .slice()
     .sort((a, b) => a.reel - b.reel)
@@ -80,28 +74,21 @@ export default function SlotGrid({
   onWinLineChange
 }: Props) {
   const rows3x5 = useMemo(() => to3x5(grid), [grid])
-
-  // only winning lines from provider (wins)
   const winLines = useMemo(() => wins.filter((w) => w.positions?.length >= 2), [wins])
 
   const [selectedWinIdx, setSelectedWinIdx] = useState(0)
   const cycleRef = useRef<number | null>(null)
 
-  // when new wins arrive -> reset and start cycling
   useEffect(() => {
     setSelectedWinIdx(0)
     if (cycleRef.current) {
       window.clearInterval(cycleRef.current)
       cycleRef.current = null
     }
-
     if (winLines.length <= 1) return
-
-    // auto-cycle only on winning lines
     cycleRef.current = window.setInterval(() => {
       setSelectedWinIdx((x) => (x + 1) % winLines.length)
     }, 900)
-
     return () => {
       if (cycleRef.current) {
         window.clearInterval(cycleRef.current)
@@ -115,8 +102,6 @@ export default function SlotGrid({
   }, [selectedWinIdx, onWinLineChange])
 
   const activeWin = winLines[selectedWinIdx] || null
-
-  // highlight set of winning positions (for glow)
   const activePosKey = useMemo(() => {
     const s = new Set<string>()
     if (!activeWin) return s
@@ -128,10 +113,8 @@ export default function SlotGrid({
 
   return (
     <div className="mx-auto w-full">
-      {/* Responsive wrapper: mobile first */}
       <div className="mx-auto w-full max-w-[760px]">
         <div className="relative rounded-3xl border border-white/10 bg-white/5 p-3 md:p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
-          {/* GRID */}
           <div className="grid grid-cols-5 gap-2 md:gap-3">
             {rows3x5.map((rowArr, r) =>
               rowArr.map((sym, c) => {
@@ -151,13 +134,7 @@ export default function SlotGrid({
                       spinning ? 'animate-[cellPulse_0.22s_ease-in-out_infinite]' : ''
                     ].join(' ')}
                   >
-                    {/* spin animation layer */}
-                    <div
-                      className={[
-                        'absolute inset-0',
-                        spinning ? 'animate-[reelBlur_0.25s_ease-in-out_infinite]' : ''
-                      ].join(' ')}
-                    />
+                    <div className={['absolute inset-0', spinning ? 'animate-[reelBlur_0.25s_ease-in-out_infinite]' : ''].join(' ')} />
 
                     {src ? (
                       <img
@@ -180,15 +157,9 @@ export default function SlotGrid({
             )}
           </div>
 
-          {/* PAYLINE OVERLAY (only when there is a win line) */}
           {activeWin ? (
             <div className="pointer-events-none absolute inset-0 z-30">
-              <svg
-                viewBox="0 0 1000 600"
-                preserveAspectRatio="none"
-                className="h-full w-full"
-              >
-                {/* glow under */}
+              <svg viewBox="0 0 1000 600" preserveAspectRatio="none" className="h-full w-full">
                 <polyline
                   points={polylinePoints}
                   fill="none"
@@ -197,8 +168,6 @@ export default function SlotGrid({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-
-                {/* main line (draw effect) */}
                 <polyline
                   className="payline-draw"
                   points={polylinePoints}
@@ -208,8 +177,6 @@ export default function SlotGrid({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-
-                {/* flash */}
                 <polyline
                   className="payline-flash"
                   points={polylinePoints}
@@ -223,11 +190,8 @@ export default function SlotGrid({
             </div>
           ) : null}
 
-          {/* bottom small HUD (wins only) */}
           <div className="mt-3 flex items-center justify-between gap-2 text-xs text-white/60">
-            <div className="font-semibold">
-              {winLines.length > 0 ? `WIN LINES: ${winLines.length}` : 'NO WIN'}
-            </div>
+            <div className="font-semibold">{winLines.length > 0 ? `WIN LINES: ${winLines.length}` : 'NO WIN'}</div>
             <div className="flex items-center gap-2">
               {fsActive ? (
                 <span className="rounded-full border border-amber-300/25 bg-amber-500/10 px-2 py-1 font-extrabold text-amber-100">
@@ -255,19 +219,13 @@ export default function SlotGrid({
           50% { transform: translateY(-1px); }
           100% { transform: translateY(0px); }
         }
-
-        /* Payline draw */
         .payline-draw {
           stroke-dasharray: 1200;
           stroke-dashoffset: 1200;
           animation: paylineDraw 420ms ease-out forwards;
           filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.45));
         }
-        @keyframes paylineDraw {
-          to { stroke-dashoffset: 0; }
-        }
-
-        /* Flash */
+        @keyframes paylineDraw { to { stroke-dashoffset: 0; } }
         .payline-flash {
           opacity: 0;
           animation: paylineFlash 720ms ease-in-out infinite;
