@@ -62,6 +62,10 @@ function winPositionsToPolyline(win: ProviderWin) {
   return pts
 }
 
+function empty5x3(): string[][] {
+  return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
+}
+
 export default function SlotGrid({
   grid,
   spinning,
@@ -73,12 +77,72 @@ export default function SlotGrid({
   fsRemaining,
   onWinLineChange
 }: Props) {
-  const rows3x5 = useMemo(() => to3x5(grid), [grid])
+  // --- Rolling reels simulation (fast, pro feel) ---
+  const [rollingGrid, setRollingGrid] = useState<string[][]>(() => grid && grid.length ? grid : empty5x3())
+  const rollTimerRef = useRef<number | null>(null)
+
+  const symbolKeys = useMemo(() => {
+    const keys = Object.keys(symbolMap || {}).filter(Boolean)
+    // fallback: include whatever engine sends (so we can still “roll”)
+    for (let r = 0; r < 5; r++) for (let y = 0; y < 3; y++) keys.push(String(grid?.[r]?.[y] ?? '').trim())
+    const uniq = Array.from(new Set(keys.filter((k) => k && k !== '—')))
+    return uniq.length ? uniq : ['A', 'K', 'Q', 'J', '10', '9', 'W', 'S']
+  }, [symbolMap, grid])
+
+  function randKey() {
+    return symbolKeys[Math.floor(Math.random() * symbolKeys.length)]
+  }
+
+  useEffect(() => {
+    // stop -> snap to final provider grid
+    if (!spinning) {
+      if (rollTimerRef.current) {
+        window.clearInterval(rollTimerRef.current)
+        rollTimerRef.current = null
+      }
+      setRollingGrid(grid)
+      return
+    }
+
+    // start rolling
+    setRollingGrid((prev) => (prev && prev.length ? prev : grid))
+
+    if (rollTimerRef.current) window.clearInterval(rollTimerRef.current)
+    rollTimerRef.current = window.setInterval(() => {
+      // update each reel with “random” symbols (gives rolling effect)
+      setRollingGrid(() => {
+        const next = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
+        for (let reel = 0; reel < 5; reel++) {
+          for (let row = 0; row < 3; row++) {
+            next[reel][row] = randKey()
+          }
+        }
+        return next
+      })
+    }, 85) // speed: not slow
+
+    return () => {
+      if (rollTimerRef.current) {
+        window.clearInterval(rollTimerRef.current)
+        rollTimerRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spinning, grid, symbolKeys.join('|')])
+
+  // use rolling grid while spinning, otherwise real grid
+  const gridToRender = spinning ? rollingGrid : grid
+
+  // --- UI grid in rows 3x5 ---
+  const rows3x5 = useMemo(() => to3x5(gridToRender), [gridToRender])
+
+  // only winning lines from provider (wins)
   const winLines = useMemo(() => wins.filter((w) => w.positions?.length >= 2), [wins])
 
   const [selectedWinIdx, setSelectedWinIdx] = useState(0)
   const cycleRef = useRef<number | null>(null)
 
+  // cycle only winning lines
   useEffect(() => {
     setSelectedWinIdx(0)
     if (cycleRef.current) {
@@ -86,9 +150,11 @@ export default function SlotGrid({
       cycleRef.current = null
     }
     if (winLines.length <= 1) return
+
     cycleRef.current = window.setInterval(() => {
       setSelectedWinIdx((x) => (x + 1) % winLines.length)
     }, 900)
+
     return () => {
       if (cycleRef.current) {
         window.clearInterval(cycleRef.current)
@@ -102,6 +168,8 @@ export default function SlotGrid({
   }, [selectedWinIdx, onWinLineChange])
 
   const activeWin = winLines[selectedWinIdx] || null
+
+  // highlight set of winning positions (for glow)
   const activePosKey = useMemo(() => {
     const s = new Set<string>()
     if (!activeWin) return s
@@ -115,6 +183,7 @@ export default function SlotGrid({
     <div className="mx-auto w-full">
       <div className="mx-auto w-full max-w-[760px]">
         <div className="relative rounded-3xl border border-white/10 bg-white/5 p-3 md:p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+          {/* GRID */}
           <div className="grid grid-cols-5 gap-2 md:gap-3">
             {rows3x5.map((rowArr, r) =>
               rowArr.map((sym, c) => {
@@ -122,6 +191,8 @@ export default function SlotGrid({
                 const row = r
                 const posKey = `${reel}:${row}`
                 const isActive = activePosKey.has(posKey)
+
+                // IMPORTANT: when spinning, use rolling symbol key; when stopped use real grid symbol key
                 const src = getAssetUrl(providerBaseUrl, gameId, sym, symbolMap)
 
                 return (
@@ -131,10 +202,16 @@ export default function SlotGrid({
                       'relative aspect-square overflow-hidden rounded-2xl border bg-black/20',
                       'border-white/10',
                       isActive ? 'ring-2 ring-emerald-300/60 shadow-[0_0_35px_rgba(16,185,129,0.28)]' : '',
-                      spinning ? 'animate-[cellPulse_0.22s_ease-in-out_infinite]' : ''
+                      spinning ? 'animate-[cellPulse_0.18s_ease-in-out_infinite]' : ''
                     ].join(' ')}
                   >
-                    <div className={['absolute inset-0', spinning ? 'animate-[reelBlur_0.25s_ease-in-out_infinite]' : ''].join(' ')} />
+                    {/* spin blur layer */}
+                    <div
+                      className={[
+                        'absolute inset-0',
+                        spinning ? `animate-[reelBlur_${220 + reel * 30}ms_ease-in-out_infinite]` : ''
+                      ].join(' ')}
+                    />
 
                     {src ? (
                       <img
@@ -142,7 +219,7 @@ export default function SlotGrid({
                         alt={sym}
                         className={[
                           'relative z-10 h-full w-full object-contain p-2 md:p-3',
-                          spinning ? 'opacity-90 blur-[0.6px]' : 'opacity-100'
+                          spinning ? 'opacity-90 blur-[0.6px] scale-[1.02]' : 'opacity-100'
                         ].join(' ')}
                         draggable={false}
                       />
@@ -157,6 +234,7 @@ export default function SlotGrid({
             )}
           </div>
 
+          {/* PAYLINE OVERLAY (only when there is a win line) */}
           {activeWin ? (
             <div className="pointer-events-none absolute inset-0 z-30">
               <svg viewBox="0 0 1000 600" preserveAspectRatio="none" className="h-full w-full">
@@ -190,6 +268,7 @@ export default function SlotGrid({
             </div>
           ) : null}
 
+          {/* small HUD */}
           <div className="mt-3 flex items-center justify-between gap-2 text-xs text-white/60">
             <div className="font-semibold">{winLines.length > 0 ? `WIN LINES: ${winLines.length}` : 'NO WIN'}</div>
             <div className="flex items-center gap-2">
@@ -210,15 +289,17 @@ export default function SlotGrid({
 
       <style jsx global>{`
         @keyframes reelBlur {
-          0% { opacity: 0.08; backdrop-filter: blur(0px); }
-          50% { opacity: 0.16; backdrop-filter: blur(2px); }
-          100% { opacity: 0.08; backdrop-filter: blur(0px); }
+          0% { opacity: 0.06; backdrop-filter: blur(0px); }
+          50% { opacity: 0.16; backdrop-filter: blur(2.2px); }
+          100% { opacity: 0.06; backdrop-filter: blur(0px); }
         }
         @keyframes cellPulse {
           0% { transform: translateY(0px); }
           50% { transform: translateY(-1px); }
           100% { transform: translateY(0px); }
         }
+
+        /* Payline draw */
         .payline-draw {
           stroke-dasharray: 1200;
           stroke-dashoffset: 1200;
@@ -226,6 +307,8 @@ export default function SlotGrid({
           filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.45));
         }
         @keyframes paylineDraw { to { stroke-dashoffset: 0; } }
+
+        /* Flash */
         .payline-flash {
           opacity: 0;
           animation: paylineFlash 720ms ease-in-out infinite;

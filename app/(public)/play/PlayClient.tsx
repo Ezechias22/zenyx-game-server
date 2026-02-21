@@ -21,7 +21,13 @@ type Game = {
   }
 }
 
-type ProviderEvent = { t?: string; type?: string; d?: any; [k: string]: unknown }
+// provider events: sometimes {t, d}, sometimes {type, ...}
+type ProviderEvent = {
+  t?: string
+  type?: string
+  d?: Record<string, unknown>
+  [k: string]: unknown
+}
 
 type ProviderPlayResponse = {
   balance?: Wallet
@@ -64,13 +70,19 @@ function empty5x3(): string[][] {
   return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
 }
 
+/**
+ * Provider grid = 5 reels × 3 rows => grid[reel][row]
+ * Parfois 3×5 => transpose.
+ */
 function to5x3(raw: unknown): string[][] | null {
   if (!Array.isArray(raw)) return null
 
+  // 5x3
   if (raw.length === 5 && raw.every((c) => Array.isArray(c) && (c as unknown[]).length === 3)) {
     return raw.map((col) => (col as unknown[]).map((x) => String(x ?? '')))
   }
 
+  // 3x5 => transpose vers 5x3
   if (raw.length === 3 && raw.every((r) => Array.isArray(r) && (r as unknown[]).length === 5)) {
     const out = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
     for (let row = 0; row < 3; row++) {
@@ -90,8 +102,13 @@ function normalizeEvents(raw: unknown): ProviderEvent[] {
   return raw
     .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
     .map((x) => {
-      const anyX: any = x
-      const t = typeof anyX.t === 'string' ? anyX.t : typeof anyX.type === 'string' ? anyX.type : 'UNKNOWN'
+      const anyX = x as ProviderEvent
+      const t =
+        typeof anyX.t === 'string'
+          ? anyX.t
+          : typeof anyX.type === 'string'
+            ? anyX.type
+            : 'UNKNOWN'
       return { ...anyX, t }
     })
 }
@@ -99,13 +116,18 @@ function normalizeEvents(raw: unknown): ProviderEvent[] {
 function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
   if (!Array.isArray(rawWins)) return []
   return rawWins
-    .filter((w: any) => Array.isArray(w?.positions))
-    .map((w: any) => ({
-      positions: (w.positions as any[])
-        .filter((p) => p && Number.isFinite(p.reel) && Number.isFinite(p.row))
+    .filter((w: unknown) => {
+      const ww = w as { positions?: unknown }
+      return Array.isArray(ww?.positions)
+    })
+    .map((w: unknown) => {
+      const ww = w as { positions: Array<{ reel?: unknown; row?: unknown }> }
+      const positions = (ww.positions ?? [])
+        .filter((p) => p && Number.isFinite(Number(p.reel)) && Number.isFinite(Number(p.row)))
         .map((p) => ({ reel: Number(p.reel), row: Number(p.row) }))
-    }))
-    .filter((w: ProviderWin) => w.positions.length >= 2)
+      return { positions }
+    })
+    .filter((w) => w.positions.length >= 2)
 }
 
 function useAnimatedNumber(value: number, durationMs = 260) {
@@ -138,6 +160,10 @@ function useAnimatedNumber(value: number, durationMs = 260) {
   return display
 }
 
+/**
+ * Build symbolKey -> asset url from catalog.
+ * Parse filename ".../symbols/W.png" => "W"
+ */
 function buildSymbolMapFromGame(game: Game | null, providerBaseUrl: string): SymbolMap {
   const base = providerBaseUrl.replace(/\/$/, '')
   const arr = game?.assets?.symbols ?? []
@@ -154,6 +180,7 @@ function buildSymbolMapFromGame(game: Game | null, providerBaseUrl: string): Sym
     map[key] = url
   }
 
+  // helpful aliases
   if (!map.W && map.wild) map.W = map.wild
   if (!map.S && map.scatter) map.S = map.scatter
   if (!map.wild && map.W) map.wild = map.W
@@ -174,6 +201,7 @@ export default function PlayClient() {
     []
   )
 
+  // (UI estimate only)
   const BUY_FS_COST_MUL = 100
   const BUY_FS_SPINS = 10
 
@@ -198,48 +226,56 @@ export default function PlayClient() {
   const [error, setError] = useState('')
   const [showProvider, setShowProvider] = useState(false)
 
+  // FS (source = provider)
   const [fsActive, setFsActive] = useState(false)
   const [fsAfter, setFsAfter] = useState(0)
   const [fsMultiplier, setFsMultiplier] = useState(1)
   const [betCost, setBetCost] = useState(1)
 
+  // Bonus intro
   const [bonusIntro, setBonusIntro] = useState(false)
   const [bonusText, setBonusText] = useState('')
 
-  // FS END overlay
+  // FS END overlay (lottie)
   const [fsEndOpen, setFsEndOpen] = useState(false)
   const [fsEndTotalWin, setFsEndTotalWin] = useState(0)
   const [fsEndGameId, setFsEndGameId] = useState('')
 
+  // Buy Free Spins modal
   const [buyOpen, setBuyOpen] = useState(false)
   const [buyBusy, setBuyBusy] = useState(false)
 
+  // animated numbers
   const animBalance = useAnimatedNumber(balanceNumber, 300)
   const animWin = useAnimatedNumber(win, 220)
   const animFs = useAnimatedNumber(fsAfter, 240)
 
+  // auto-play timer
   const autoTimerRef = useRef<number | null>(null)
 
+  // Load catalog
   useEffect(() => {
     let alive = true
     ;(async () => {
       try {
         const r = await fetch('/api/games', { cache: 'no-store' })
-        const j: any = await r.json()
-        if (!r.ok) throw new Error(j?.error || 'catalog error')
+        const j: unknown = await r.json()
+        if (!r.ok) throw new Error((j as any)?.error || 'catalog error')
 
-        const list: Game[] = Array.isArray(j) ? (j as Game[]) : (j?.games ?? [])
+        const list: Game[] = Array.isArray(j) ? (j as Game[]) : ((j as any)?.games ?? [])
         if (!alive) return
         setCatalog(list)
-      } catch (e: any) {
-        if (alive) setError(e?.message ?? 'catalog error')
+      } catch (e: unknown) {
+        if (alive) setError((e as any)?.message ?? 'catalog error')
       }
     })()
+
     return () => {
       alive = false
     }
   }, [])
 
+  // Ensure session
   useEffect(() => {
     if (!gameId) return
 
@@ -268,14 +304,15 @@ export default function PlayClient() {
         if (!alive) return
 
         setSessionId(json.sessionId)
+
         const base = PROVIDER_BASE_URL.replace(/\/$/, '')
         setLaunchUrl(`${base}/v1/launch?s=${encodeURIComponent(json.sessionId)}`)
 
         const next = new URLSearchParams(params.toString())
         next.set('sessionId', json.sessionId)
         router.replace(`/play?${next.toString()}`)
-      } catch (e: any) {
-        if (alive) setError(e?.message ?? 'Session error')
+      } catch (e: unknown) {
+        if (alive) setError((e as any)?.message ?? 'Session error')
       }
     })()
 
@@ -294,7 +331,7 @@ export default function PlayClient() {
   async function doSpin(
     trigger: 'manual' | 'auto' = 'manual',
     extra?: { buyFreeSpins?: boolean; idempotencyKey?: string }
-  ) {
+  ): Promise<void> {
     if (!sessionId) return
     if (inFlight.current) return
 
@@ -306,12 +343,13 @@ export default function PlayClient() {
 
     try {
       const betToSend = Math.max(1, Number(bet) || 1)
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         sessionId,
-        bet: betToSend,
-        ...(extra?.buyFreeSpins ? { buyFreeSpins: true } : {}),
-        ...(extra?.idempotencyKey ? { idempotencyKey: extra.idempotencyKey } : {})
+        bet: betToSend
       }
+
+      if (extra?.buyFreeSpins) payload.buyFreeSpins = true
+      if (extra?.idempotencyKey) payload.idempotencyKey = extra.idempotencyKey
 
       const res = await fetch('/api/play', {
         method: 'POST',
@@ -322,19 +360,24 @@ export default function PlayClient() {
       const raw = (await res.json()) as ProviderPlayResponse
       if (!res.ok) throw new Error(raw?.error || 'Spin failed')
 
+      // balance (provider authoritative)
       if (raw?.balance) {
         setWallet(raw.balance)
         setBalanceNumber(parseDecimal(raw.balance.balance))
       }
 
+      // grid
       const g = to5x3(raw?.result?.grid)
       if (g) setGrid(g)
 
+      // wins
       const winList = normalizeProviderWins(raw?.result?.wins)
       setWins(winList)
 
+      // win
       setWin(parseDecimal(raw?.result?.win ?? raw?.win ?? 0))
 
+      // free spins state (provider authoritative)
       const fs = raw?.result?.freeSpins
       const after = parseIntSafe(fs?.after)
       const active = Boolean(fs?.active) || after > 0
@@ -343,8 +386,10 @@ export default function PlayClient() {
       setFsActive(active)
       setFsMultiplier(mult)
 
+      // betCost (0 => FREE SPIN)
       setBetCost(parseDecimal(raw?.result?.betCost ?? 1))
 
+      // events
       const events = normalizeEvents(raw?.result?.events)
 
       const startEv = events.find((e) => e.t === 'FREE_SPINS_START')
@@ -353,39 +398,33 @@ export default function PlayClient() {
       const endEv = events.find((e) => e.t === 'FREE_SPINS_END')
 
       if (startEv) {
-        const total = parseIntSafe((startEv as any)?.d?.total) || after
+        const total = parseIntSafe((startEv.d as any)?.total) || after
         showBonus(`${total} FREE SPINS`)
       } else if (trigEv) {
-        const freeSpins = parseIntSafe((trigEv as any)?.d?.freeSpins)
+        const freeSpins = parseIntSafe((trigEv.d as any)?.freeSpins)
         if (freeSpins > 0) showBonus(`${freeSpins} FREE SPINS`)
       } else if (reEv) {
-        const added = parseIntSafe((reEv as any)?.d?.added)
+        const added = parseIntSafe((reEv.d as any)?.added)
         if (added > 0) showBonus(`+${added} FREE SPINS`)
       }
 
-      // ✅ FS END overlay + lottie
+      // FS END overlay + lottie mapping (/assets/<gameId>/lottie/fs_end.json)
       if (endEv) {
-        const totalWinStr = String((endEv as any)?.d?.totalWin ?? '0')
+        const totalWinStr = String((endEv.d as any)?.totalWin ?? '0')
         const totalWin = parseDecimal(totalWinStr)
-        const uiGameId = String((endEv as any)?.d?.ui?.gameId ?? gameId ?? '')
-        const anim = String((endEv as any)?.d?.ui?.animation ?? '')
+        const uiGameId = String((endEv.d as any)?.ui?.gameId ?? gameId ?? '')
+        const anim = String((endEv.d as any)?.ui?.animation ?? '')
 
-        // Only show if provider says FS_END (contract)
-        if (anim === 'FS_END') {
-          setFsEndTotalWin(totalWin)
-          setFsEndGameId(uiGameId || gameId)
-          setFsEndOpen(true)
-        } else {
-          // fallback anyway
+        // show overlay when provider says FS_END (or fallback)
+        if (anim === 'FS_END' || true) {
           setFsEndTotalWin(totalWin)
           setFsEndGameId(uiGameId || gameId)
           setFsEndOpen(true)
         }
-
         showBonus(`FREE SPINS COMPLETE`)
       }
-    } catch (e: any) {
-      setError(e?.message ?? 'Spin error')
+    } catch (e: unknown) {
+      setError((e as any)?.message ?? 'Spin error')
     } finally {
       window.setTimeout(() => {
         setSpinning(false)
@@ -394,6 +433,7 @@ export default function PlayClient() {
     }
   }
 
+  // Auto-play during FS
   useEffect(() => {
     if (autoTimerRef.current) {
       window.clearTimeout(autoTimerRef.current)
@@ -440,30 +480,31 @@ export default function PlayClient() {
         </div>
       ) : null}
 
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-lg font-extrabold">{headerTitle}</div>
-          <div className="text-xs text-white/60">
-            {currency} • Balance: {(animBalance || 0).toFixed(2)}
-            {fsActive ? (
-              <span className="ml-2 font-extrabold text-amber-200">
-                FREE SPINS: {Math.max(0, Math.round(animFs))} • x{fsMultiplier}
-              </span>
-            ) : null}
-            {betCost === 0 ? <span className="ml-2 text-emerald-200/90">• FREE SPIN</span> : null}
-          </div>
+      {/* Header */}
+      <div className="mb-3">
+        <div className="text-lg font-extrabold">{headerTitle}</div>
+        <div className="text-xs text-white/60">
+          {currency} • Balance: {(animBalance || 0).toFixed(2)}
+          {fsActive ? (
+            <span className="ml-2 font-extrabold text-amber-200">
+              FREE SPINS: {Math.max(0, Math.round(animFs))} • x{fsMultiplier}
+            </span>
+          ) : null}
+          {betCost === 0 ? <span className="ml-2 text-emerald-200/90">• FREE SPIN</span> : null}
         </div>
+      </div>
 
+      {/* Grid + overlays */}
+      <div className="relative">
+        {/* ✅ PROVIDER VIEW now as overlay (not in header) */}
         <button
           disabled={!launchUrl}
           onClick={() => setShowProvider(true)}
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 disabled:opacity-50"
+          className="absolute right-3 top-3 z-50 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-xs font-extrabold text-white/85 backdrop-blur hover:bg-black/55 disabled:opacity-50"
         >
           PROVIDER VIEW
         </button>
-      </div>
 
-      <div className="relative">
         {fsActive ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2">
             <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100 shadow-[0_0_30px_rgba(245,158,11,0.35)]">
@@ -498,6 +539,7 @@ export default function PlayClient() {
         />
       </div>
 
+      {/* Bottom panel (fixed) */}
       <div className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-black/40 backdrop-blur-md">
         <div className="mx-auto w-full max-w-[1100px] px-3 py-3">
           <SpinPanel
@@ -524,6 +566,7 @@ export default function PlayClient() {
         </div>
       </div>
 
+      {/* Buy Free Spins */}
       <BuyFreeSpinsModal
         open={buyOpen}
         bet={Math.max(1, Number(bet) || 1)}
@@ -535,6 +578,7 @@ export default function PlayClient() {
         onConfirm={confirmBuyFreeSpins}
       />
 
+      {/* Free Spins End overlay (Lottie) */}
       <FreeSpinsEndOverlay
         open={fsEndOpen}
         gameId={fsEndGameId || gameId}
@@ -543,6 +587,7 @@ export default function PlayClient() {
         onClose={() => setFsEndOpen(false)}
       />
 
+      {/* Provider iframe */}
       {showProvider && launchUrl ? (
         <ProviderLaunchFrame launchUrl={launchUrl} onClose={() => setShowProvider(false)} />
       ) : null}
