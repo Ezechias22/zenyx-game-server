@@ -57,7 +57,12 @@ export function providerCreateSession(input: {
   })
 }
 
-export function providerPlay(input: { sessionId: string; bet: number; buyFreeSpins?: boolean }) {
+export function providerPlay(input: {
+  sessionId: string
+  bet?: number
+  buyFreeSpins?: boolean
+  idempotencyKey?: string
+}) {
   return providerFetch<any>({
     method: 'POST',
     path: '/v1/public/play',

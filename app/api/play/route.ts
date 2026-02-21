@@ -10,7 +10,10 @@ export async function POST(req: Request) {
 
     const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : ''
     const betRaw = body?.bet
+
     const buyFreeSpins = Boolean(body?.buyFreeSpins)
+    const idempotencyKey =
+      typeof body?.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 })
@@ -25,12 +28,12 @@ export async function POST(req: Request) {
 
     const betSafe = Number.isFinite(bet) && bet > 0 ? bet : 1
 
-    // ✅ proxy provider tel quel, buyFreeSpins inclus
     const spin = await providerPlay({
       sessionId,
       bet: betSafe,
-      ...(buyFreeSpins ? { buyFreeSpins: true } : {})
-    } as any)
+      buyFreeSpins: buyFreeSpins ? true : undefined,
+      idempotencyKey: idempotencyKey || undefined
+    })
 
     return NextResponse.json(spin, { status: 200 })
   } catch (e: any) {
