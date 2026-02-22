@@ -31,9 +31,7 @@ function keyOf(cell: string): string {
 function to3x5(grid5x3: string[][]): string[][] {
   const out: string[][] = Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => ''))
   for (let reel = 0; reel < 5; reel++) {
-    for (let row = 0; row < 3; row++) {
-      out[row][reel] = keyOf(grid5x3?.[reel]?.[row] ?? '')
-    }
+    for (let row = 0; row < 3; row++) out[row][reel] = keyOf(grid5x3?.[reel]?.[row] ?? '')
   }
   return out
 }
@@ -77,7 +75,7 @@ export default function SlotGrid({
   fsRemaining,
   onWinLineChange
 }: Props) {
-  // rolling reel simulation
+  // rolling
   const [rollingGrid, setRollingGrid] = useState<string[][]>(() => (grid?.length ? grid : empty5x3()))
   const rollTimerRef = useRef<number | null>(null)
 
@@ -102,8 +100,6 @@ export default function SlotGrid({
       return
     }
 
-    setRollingGrid((prev) => (prev && prev.length ? prev : grid))
-
     if (rollTimerRef.current) window.clearInterval(rollTimerRef.current)
     rollTimerRef.current = window.setInterval(() => {
       setRollingGrid(() => {
@@ -113,7 +109,7 @@ export default function SlotGrid({
         }
         return next
       })
-    }, 78)
+    }, 70)
 
     return () => {
       if (rollTimerRef.current) {
@@ -122,7 +118,7 @@ export default function SlotGrid({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spinning, grid, symbolKeys.join('|')])
+  }, [spinning, symbolKeys.join('|')])
 
   const gridToRender = spinning ? rollingGrid : grid
   const rows3x5 = useMemo(() => to3x5(gridToRender), [gridToRender])
@@ -157,7 +153,6 @@ export default function SlotGrid({
   }, [selectedWinIdx, onWinLineChange])
 
   const activeWin = winLines[selectedWinIdx] || null
-
   const activePosKey = useMemo(() => {
     const s = new Set<string>()
     if (!activeWin) return s
@@ -169,20 +164,19 @@ export default function SlotGrid({
 
   return (
     <div className="mx-auto w-full">
-      {/* ✅ Center + taller grid to fill space */}
+      {/* ✅ Taller grid; tight spacing; no drag */}
       <div
         className={[
           'relative mx-auto w-full max-w-[920px]',
-          // IMPORTANT: make it taller on mobile (fill above panel)
-          'h-[calc(100dvh-280px)]',
-          'min-h-[380px] max-h-[740px]',
-          'rounded-[28px] border border-white/12 bg-white/6',
-          'p-3.5 sm:p-4 md:p-5',
-          'shadow-[0_22px_90px_rgba(0,0,0,0.52)]'
+          'h-[calc(100dvh-290px)] min-h-[420px] max-h-[780px]',
+          'rounded-[26px] border border-white/12 bg-white/6',
+          'p-2.5 sm:p-3 md:p-3.5',
+          'shadow-[0_22px_90px_rgba(0,0,0,0.52)]',
+          'touch-none select-none' // ✅ prevent finger drag
         ].join(' ')}
       >
-        {/* grid content uses full height */}
-        <div className="grid h-full grid-cols-5 gap-2.5 sm:gap-3 md:gap-3.5">
+        {/* ✅ Nearly stuck cells */}
+        <div className="grid h-full grid-cols-5 gap-[3px] sm:gap-1 md:gap-1.5">
           {rows3x5.map((rowArr, r) =>
             rowArr.map((sym, c) => {
               const reel = c
@@ -195,7 +189,7 @@ export default function SlotGrid({
                 <div
                   key={`${r}_${c}_${sym}`}
                   className={[
-                    'relative overflow-hidden rounded-2xl border bg-black/25',
+                    'relative overflow-hidden rounded-[18px] border bg-black/25',
                     'border-white/10',
                     isActive ? 'ring-2 ring-emerald-300/70 shadow-[0_0_42px_rgba(16,185,129,0.30)]' : '',
                     spinning ? 'animate-[cellPulse_0.16s_ease-in-out_infinite]' : ''
@@ -214,9 +208,9 @@ export default function SlotGrid({
                       alt={sym}
                       className={[
                         'relative z-10 h-full w-full object-contain',
-                        // ✅ bigger symbols, less padding
-                        'p-1.5 sm:p-2 md:p-2.5',
-                        spinning ? 'opacity-90 blur-[0.7px] scale-[1.04]' : 'opacity-100'
+                        // ✅ Symbols bigger: almost no padding
+                        'p-[2px] sm:p-[3px] md:p-1',
+                        spinning ? 'opacity-90 blur-[0.7px] scale-[1.06]' : 'opacity-100'
                       ].join(' ')}
                       draggable={false}
                     />
@@ -231,7 +225,6 @@ export default function SlotGrid({
           )}
         </div>
 
-        {/* payline overlay */}
         {activeWin ? (
           <div className="pointer-events-none absolute inset-0 z-30">
             <svg viewBox="0 0 1000 600" preserveAspectRatio="none" className="h-full w-full">
@@ -265,10 +258,9 @@ export default function SlotGrid({
           </div>
         ) : null}
 
-        {/* ✅ Removed "NO WIN" / HUD text completely */}
-        {/* Only optional tiny FS tag */}
+        {/* optional FS tag only */}
         {fsActive ? (
-          <div className="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2">
+          <div className="pointer-events-none absolute bottom-2 left-1/2 z-40 -translate-x-1/2">
             <div className="rounded-full border border-amber-300/25 bg-amber-500/10 px-3 py-1 text-[11px] font-extrabold text-amber-100">
               FREE SPINS • {fsRemaining}
             </div>
