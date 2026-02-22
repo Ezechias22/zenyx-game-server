@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import SpinPanel from '@/components/SpinPanel'
 import SlotGrid, { type ProviderWin, type SymbolMap } from '@/components/SlotGrid'
+import SpinPanel from '@/components/SpinPanel'
 import BuyFreeSpinsModal from '@/components/BuyFreeSpinsModal'
 import FreeSpinsEndOverlay from '@/components/FreeSpinsEndOverlay'
 
@@ -106,7 +106,7 @@ function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
     .filter((w: ProviderWin) => w.positions.length >= 2)
 }
 
-function useAnimatedNumber(value: number, durationMs = 260) {
+function useAnimatedNumber(value: number, durationMs = 240) {
   const [display, setDisplay] = useState(value)
   const fromRef = useRef(value)
   const rafRef = useRef<number | null>(null)
@@ -174,11 +174,11 @@ export default function PlayClient() {
     []
   )
 
+  // Buy FS estimate (UI only)
   const BUY_FS_COST_MUL = 100
   const BUY_FS_SPINS = 10
 
   const [sessionId, setSessionId] = useState(sessionIdParam)
-
   const [catalog, setCatalog] = useState<Game[]>([])
   const game = useMemo(() => catalog.find((g) => g.id === gameId) || null, [catalog, gameId])
   const symbolMap = useMemo(() => buildSymbolMapFromGame(game, PROVIDER_BASE_URL), [game, PROVIDER_BASE_URL])
@@ -211,24 +211,26 @@ export default function PlayClient() {
   const [buyOpen, setBuyOpen] = useState(false)
   const [buyBusy, setBuyBusy] = useState(false)
 
-  const animBalance = useAnimatedNumber(balanceNumber, 300)
+  // AUTO / TURBO
+  const [autoOn, setAutoOn] = useState(false)
+  const [turboOn, setTurboOn] = useState(false)
+  const autoTimerRef = useRef<number | null>(null)
+
+  const animBalance = useAnimatedNumber(balanceNumber, 280)
   const animWin = useAnimatedNumber(win, 220)
   const animFs = useAnimatedNumber(fsAfter, 240)
 
-  const autoTimerRef = useRef<number | null>(null)
-
-  // ✅ IMPORTANT: on ne bloque plus le scroll global (ça cassait l’UI)
-  // On bloque juste le drag sur le grid (dans SlotGrid via touch-action: none)
+  // prevent finger-drag on grid area
   useEffect(() => {
-    // prevent iOS rubber band
-    const prev = (document.documentElement.style as any).overscrollBehavior
-    ;(document.documentElement.style as any).overscrollBehavior = 'none'
+    const prevent = (e: TouchEvent) => e.preventDefault()
+    const el = document.getElementById('slot-grid-touch-lock')
+    if (el) el.addEventListener('touchmove', prevent, { passive: false })
     return () => {
-      ;(document.documentElement.style as any).overscrollBehavior = prev
+      if (el) el.removeEventListener('touchmove', prevent as any)
     }
   }, [])
 
-  // load catalog
+  // catalog
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -248,7 +250,7 @@ export default function PlayClient() {
     }
   }, [])
 
-  // ensure session
+  // session
   useEffect(() => {
     if (!gameId) return
 
@@ -269,7 +271,6 @@ export default function PlayClient() {
             currency: 'BRL'
           })
         })
-
         const json: any = await res.json()
         if (!res.ok) throw new Error(json?.error || 'Session error')
         if (!alive) return
@@ -339,7 +340,7 @@ export default function PlayClient() {
       setWin(parseDecimal(raw?.result?.win ?? raw?.win ?? 0))
 
       const fs = raw?.result?.freeSpins
-      const after = parseIntSafe(fs?.after)
+      const after = Math.max(0, parseIntSafe(fs?.after))
       const active = Boolean(fs?.active) || after > 0
       const mult = Math.max(1, parseDecimal(fs?.multiplier ?? 1))
       setFsAfter(after)
@@ -349,6 +350,7 @@ export default function PlayClient() {
       setBetCost(parseDecimal(raw?.result?.betCost ?? 1))
 
       const events = normalizeEvents(raw?.result?.events)
+
       const startEv = events.find((e) => e.t === 'FREE_SPINS_START')
       const trigEv = events.find((e) => e.t === 'SCATTER_TRIGGER')
       const reEv = events.find((e) => e.t === 'FREE_SPINS_RETRIGGER')
@@ -376,14 +378,18 @@ export default function PlayClient() {
       }
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
+      // si erreur pendant AUTO -> stop auto
+      if (trigger === 'auto') setAutoOn(false)
     } finally {
+      const settle = turboOn ? 90 : 170
       window.setTimeout(() => {
         setSpinning(false)
         inFlight.current = false
-      }, 170)
+      }, settle)
     }
   }
 
+  // ✅ Free spins autoplay (provider authoritative)
   useEffect(() => {
     if (autoTimerRef.current) {
       window.clearTimeout(autoTimerRef.current)
@@ -393,7 +399,7 @@ export default function PlayClient() {
     if (fsActive && fsAfter > 0 && !spinning && !inFlight.current) {
       autoTimerRef.current = window.setTimeout(() => {
         doSpin('auto')
-      }, 520)
+      }, turboOn ? 260 : 520)
     }
 
     return () => {
@@ -403,7 +409,29 @@ export default function PlayClient() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fsActive, fsAfter, spinning])
+  }, [fsActive, fsAfter, spinning, turboOn])
+
+  // ✅ AUTO mode (normal spins) — only when NOT in free spins
+  useEffect(() => {
+    if (autoTimerRef.current) {
+      window.clearTimeout(autoTimerRef.current)
+      autoTimerRef.current = null
+    }
+
+    if (autoOn && !fsActive && !spinning && !inFlight.current) {
+      autoTimerRef.current = window.setTimeout(() => {
+        doSpin('auto')
+      }, turboOn ? 300 : 700)
+    }
+
+    return () => {
+      if (autoTimerRef.current) {
+        window.clearTimeout(autoTimerRef.current)
+        autoTimerRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOn, fsActive, spinning, turboOn])
 
   async function confirmBuyFreeSpins() {
     if (!sessionId) return
@@ -441,20 +469,17 @@ export default function PlayClient() {
       }}
     >
       <div className="min-h-[100dvh] bg-black/55">
-        {/* ✅ IMPORTANT: padding bottom pour laisser la place au panel */}
-        <div className="mx-auto w-full max-w-[1100px] px-3 pb-[210px]">
-          {error ? (
-            <div className="mt-3 mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-              {error}
-            </div>
-          ) : (
-            <div className="h-3" />
-          )}
+        <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1100px] flex-col px-3 pb-4">
+          {/* header compact */}
+          <div className="pt-3">
+            {error ? (
+              <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-semibold text-red-200">
+                {error}
+              </div>
+            ) : null}
 
-          {/* Header */}
-          <div className="pt-2">
-            <div className="text-lg font-extrabold text-white">{headerTitle}</div>
-            <div className="text-xs text-white/70">
+            <div className="text-base font-extrabold text-white">{headerTitle}</div>
+            <div className="text-[11px] font-semibold text-white/70">
               {currency} • Balance: {(animBalance || 0).toFixed(2)}
               {fsActive ? (
                 <span className="ml-2 font-extrabold text-amber-200">
@@ -465,44 +490,49 @@ export default function PlayClient() {
             </div>
           </div>
 
-          {/* Grid + overlays */}
-          <div className="mt-3 flex w-full justify-center">
-            <div className="relative w-full">
-              {fsActive ? (
-                <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2">
-                  <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-xs font-extrabold text-amber-100 shadow-[0_0_30px_rgba(245,158,11,0.35)]">
-                    FREE SPINS MODE • {fsAfter} LEFT • x{fsMultiplier}
-                  </div>
-                </div>
-              ) : null}
-
-              {bonusIntro ? (
-                <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
-                  <div className="absolute inset-0 rounded-[28px] bg-gradient-to-b from-amber-500/25 via-purple-500/15 to-black/40 backdrop-blur-[1px] animate-[fadeInOut_1.4s_ease-in-out_forwards]" />
-                  <div className="relative z-10 text-center">
-                    <div className="text-[clamp(22px,4vw,44px)] font-black tracking-tight text-white drop-shadow-[0_0_30px_rgba(245,158,11,0.35)]">
-                      BONUS
-                    </div>
-                    <div className="mt-2 text-[clamp(12px,2.2vw,16px)] font-extrabold text-amber-100/95">
-                      {bonusText}
+          {/* grid area grows */}
+          <div className="mt-3 flex flex-1 flex-col items-center justify-center">
+            <div id="slot-grid-touch-lock" className="touch-none select-none w-full">
+              <div className="relative">
+                {/* FS badge */}
+                {fsActive ? (
+                  <div className="pointer-events-none absolute left-1/2 top-2 z-30 -translate-x-1/2">
+                    <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-3 py-1.5 text-[11px] font-extrabold text-amber-100 shadow-[0_0_26px_rgba(245,158,11,0.35)]">
+                      FREE SPINS • {fsAfter} LEFT • x{fsMultiplier}
                     </div>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
 
-              <SlotGrid
-                grid={grid}
-                spinning={spinning}
-                providerBaseUrl={PROVIDER_BASE_URL}
-                gameId={gameId}
-                symbolMap={symbolMap}
-                wins={wins}
-                fsActive={fsActive}
-                fsRemaining={fsAfter}
-              />
+                {/* bonus overlay */}
+                {bonusIntro ? (
+                  <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-[26px] bg-gradient-to-b from-amber-500/25 via-purple-500/15 to-black/40 backdrop-blur-[1px] animate-[fadeInOut_1.4s_ease-in-out_forwards]" />
+                    <div className="relative z-10 text-center">
+                      <div className="text-[clamp(18px,3.6vw,40px)] font-black tracking-tight text-white drop-shadow-[0_0_30px_rgba(245,158,11,0.35)]">
+                        BONUS
+                      </div>
+                      <div className="mt-1 text-[clamp(11px,2.2vw,15px)] font-extrabold text-amber-100/95">
+                        {bonusText}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <SlotGrid
+                  grid={grid}
+                  spinning={spinning}
+                  providerBaseUrl={PROVIDER_BASE_URL}
+                  gameId={gameId}
+                  symbolMap={symbolMap}
+                  wins={wins}
+                  fsActive={fsActive}
+                  fsRemaining={fsAfter}
+                  turbo={turboOn}
+                />
+              </div>
 
               {/* BUY FS under grid */}
-              <div className="mt-3 flex justify-center">
+              <div className="mt-2 w-full">
                 <button
                   onClick={() => {
                     if (fsActive) return
@@ -510,8 +540,8 @@ export default function PlayClient() {
                   }}
                   disabled={spinning || fsActive}
                   className={[
-                    'h-11 w-full max-w-[520px] rounded-2xl border border-white/15',
-                    'bg-white/10 text-white/90 font-black tracking-wide',
+                    'h-11 w-full rounded-2xl border border-white/15',
+                    'bg-white/10 text-sm font-black tracking-wide text-white/90',
                     'hover:bg-white/15 active:scale-[0.99]',
                     'transition-all duration-200',
                     spinning || fsActive ? 'opacity-50' : 'animate-[softGlow_1.6s_ease-in-out_infinite]'
@@ -521,61 +551,71 @@ export default function PlayClient() {
                 </button>
               </div>
 
+              {/* panel (auto/turbo/spin) */}
+              <div className="mt-2 w-full">
+                <SpinPanel
+                  balance={Number.isFinite(animBalance) ? animBalance : balanceNumber}
+                  win={Number.isFinite(animWin) ? animWin : win}
+                  bet={bet}
+                  setBet={(v) => {
+                    if (fsActive) return
+                    setBet(v)
+                  }}
+                  onSpin={() => doSpin('manual')}
+                  spinning={spinning || (fsActive && fsAfter > 0)}
+                  fsLocked={fsActive}
+                  autoOn={autoOn}
+                  turboOn={turboOn}
+                  onToggleAuto={() => {
+                    if (fsActive) return // FS already auto-run
+                    setAutoOn((x) => !x)
+                  }}
+                  onToggleTurbo={() => setTurboOn((x) => !x)}
+                />
+              </div>
+
               {fsActive ? (
-                <div className="mt-2 text-center text-xs font-semibold text-white/70">
+                <div className="mt-2 text-center text-[11px] font-semibold text-white/70">
                   Bet locked during free spins • Provider controls betCost
                 </div>
               ) : null}
             </div>
           </div>
+
+          {/* modals */}
+          <BuyFreeSpinsModal
+            open={buyOpen}
+            bet={Math.max(0.01, Number(bet) || 1)}
+            currency={currency}
+            buyFsCostMul={BUY_FS_COST_MUL}
+            freeSpinsCount={BUY_FS_SPINS}
+            busy={buyBusy || spinning}
+            onCancel={() => setBuyOpen(false)}
+            onConfirm={confirmBuyFreeSpins}
+          />
+
+          <FreeSpinsEndOverlay
+            open={fsEndOpen}
+            gameId={fsEndGameId || gameId}
+            totalWin={fsEndTotalWin}
+            currency={currency}
+            onClose={() => setFsEndOpen(false)}
+          />
+
+          <style jsx global>{`
+            @keyframes fadeInOut {
+              0% { opacity: 0; transform: scale(0.98); }
+              12% { opacity: 1; transform: scale(1); }
+              70% { opacity: 1; transform: scale(1); }
+              100% { opacity: 0; transform: scale(1.02); }
+            }
+            @keyframes softGlow {
+              0% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
+              50% { box-shadow: 0 0 26px rgba(245,158,11,0.22); }
+              100% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
+            }
+          `}</style>
         </div>
-
-        {/* Bottom panel always visible */}
-        <SpinPanel
-          balance={Number.isFinite(animBalance) ? animBalance : balanceNumber}
-          win={Number.isFinite(animWin) ? animWin : win}
-          bet={bet}
-          setBet={(v) => {
-            if (fsActive) return
-            setBet(v)
-          }}
-          onSpin={() => doSpin('manual')}
-          spinning={spinning || (fsActive && fsAfter > 0)}
-          fsLocked={fsActive}
-        />
-
-        <BuyFreeSpinsModal
-          open={buyOpen}
-          bet={Math.max(0.01, Number(bet) || 1)}
-          currency={currency}
-          buyFsCostMul={BUY_FS_COST_MUL}
-          freeSpinsCount={BUY_FS_SPINS}
-          busy={buyBusy || spinning}
-          onCancel={() => setBuyOpen(false)}
-          onConfirm={confirmBuyFreeSpins}
-        />
-
-        <FreeSpinsEndOverlay
-          open={fsEndOpen}
-          gameId={fsEndGameId || gameId}
-          totalWin={fsEndTotalWin}
-          currency={currency}
-          onClose={() => setFsEndOpen(false)}
-        />
-
-        <style jsx global>{`
-          @keyframes fadeInOut {
-            0% { opacity: 0; transform: scale(0.98); }
-            12% { opacity: 1; transform: scale(1); }
-            70% { opacity: 1; transform: scale(1); }
-            100% { opacity: 0; transform: scale(1.02); }
-          }
-          @keyframes softGlow {
-            0% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
-            50% { box-shadow: 0 0 28px rgba(245,158,11,0.25); }
-            100% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
-          }
-        `}</style>
       </div>
     </div>
   )
