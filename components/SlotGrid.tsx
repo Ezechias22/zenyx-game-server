@@ -9,7 +9,7 @@ export type ProviderWin = {
 }
 
 type Props = {
-  grid: string[][] // 5x3 => grid[reel][row]
+  grid: string[][]
   spinning: boolean
   providerBaseUrl: string
   gameId: string
@@ -31,9 +31,7 @@ function keyOf(cell: string): string {
 function to3x5(grid5x3: string[][]): string[][] {
   const out: string[][] = Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => ''))
   for (let reel = 0; reel < 5; reel++) {
-    for (let row = 0; row < 3; row++) {
-      out[row][reel] = keyOf(grid5x3?.[reel]?.[row] ?? '')
-    }
+    for (let row = 0; row < 3; row++) out[row][reel] = keyOf(grid5x3?.[reel]?.[row] ?? '')
   }
   return out
 }
@@ -48,7 +46,7 @@ function getAssetUrl(base: string, gameId: string, symbolKey: string, symbolMap:
 }
 
 function winPositionsToPolyline(win: ProviderWin) {
-  const pts = win.positions
+  return win.positions
     .slice()
     .sort((a, b) => a.reel - b.reel)
     .map((p) => {
@@ -59,7 +57,6 @@ function winPositionsToPolyline(win: ProviderWin) {
       return `${x},${y}`
     })
     .join(' ')
-  return pts
 }
 
 function empty5x3(): string[][] {
@@ -77,8 +74,8 @@ export default function SlotGrid({
   fsRemaining,
   onWinLineChange
 }: Props) {
-  // --- Rolling reels simulation ---
-  const [rollingGrid, setRollingGrid] = useState<string[][]>(() => (grid && grid.length ? grid : empty5x3()))
+  // rolling grid
+  const [rollingGrid, setRollingGrid] = useState<string[][]>(() => (grid?.length ? grid : empty5x3()))
   const rollTimerRef = useRef<number | null>(null)
 
   const symbolKeys = useMemo(() => {
@@ -93,7 +90,6 @@ export default function SlotGrid({
   }
 
   useEffect(() => {
-    // stop -> snap to final provider grid
     if (!spinning) {
       if (rollTimerRef.current) {
         window.clearInterval(rollTimerRef.current)
@@ -103,16 +99,13 @@ export default function SlotGrid({
       return
     }
 
-    // start rolling
-    setRollingGrid((prev) => (prev && prev.length ? prev : grid))
+    setRollingGrid((prev) => (prev?.length ? prev : grid))
 
     if (rollTimerRef.current) window.clearInterval(rollTimerRef.current)
     rollTimerRef.current = window.setInterval(() => {
       setRollingGrid(() => {
         const next = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
-        for (let reel = 0; reel < 5; reel++) {
-          for (let row = 0; row < 3; row++) next[reel][row] = randKey()
-        }
+        for (let reel = 0; reel < 5; reel++) for (let row = 0; row < 3; row++) next[reel][row] = randKey()
         return next
       })
     }, 80)
@@ -168,128 +161,94 @@ export default function SlotGrid({
 
   return (
     <div className="mx-auto w-full">
-      {/* ✅ Mobile: grid centered on screen and bigger */}
-      <div className="mx-auto w-full">
+      {/* ✅ Responsive frame: fits width AND height */}
+      <div className="mx-auto w-[min(96vw,980px)]">
         <div
           className={[
-            // on mobile: keep it centered and visually dominant
-            'mx-auto w-[min(96vw,980px)]',
-            'md:w-full md:max-w-[980px]',
-            'flex items-center justify-center',
-            // try to center vertically within available space (without breaking desktop)
-            'min-h-[58vh] md:min-h-0'
+            'relative mx-auto',
+            // ✅ slot ratio (5 reels x 3 rows)
+            'aspect-[5/3]',
+            // ✅ prevent overflow on short screens
+            'max-h-[56vh]',
+            // ✅ allow width to shrink naturally if height is the limiting factor
+            'w-full',
+            'rounded-[28px] border border-white/12 bg-white/6',
+            'p-3.5 sm:p-4 md:p-5',
+            'shadow-[0_22px_90px_rgba(0,0,0,0.52)]'
           ].join(' ')}
         >
-          <div
-            className={[
-              'relative w-full rounded-[28px] border border-white/12 bg-white/6',
-              // bigger padding for mobile to let symbols breathe
-              'p-3.5 sm:p-4 md:p-5',
-              'shadow-[0_22px_90px_rgba(0,0,0,0.52)]'
-            ].join(' ')}
-          >
-            {/* GRID */}
-            <div className="grid grid-cols-5 gap-2.5 sm:gap-3 md:gap-3.5">
-              {rows3x5.map((rowArr, r) =>
-                rowArr.map((sym, c) => {
-                  const reel = c
-                  const row = r
-                  const posKey = `${reel}:${row}`
-                  const isActive = activePosKey.has(posKey)
+          <div className="grid h-full grid-cols-5 gap-2.5 sm:gap-3 md:gap-3.5">
+            {rows3x5.map((rowArr, r) =>
+              rowArr.map((sym, c) => {
+                const reel = c
+                const row = r
+                const posKey = `${reel}:${row}`
+                const isActive = activePosKey.has(posKey)
 
-                  const src = getAssetUrl(providerBaseUrl, gameId, sym, symbolMap)
+                const src = getAssetUrl(providerBaseUrl, gameId, sym, symbolMap)
 
-                  return (
+                return (
+                  <div
+                    key={`${r}_${c}_${sym}`}
+                    className={[
+                      'relative aspect-square overflow-hidden rounded-3xl border bg-black/22',
+                      'border-white/10',
+                      isActive ? 'ring-2 ring-emerald-300/60 shadow-[0_0_38px_rgba(16,185,129,0.28)]' : '',
+                      spinning ? 'animate-[cellPulse_0.16s_ease-in-out_infinite]' : ''
+                    ].join(' ')}
+                  >
                     <div
-                      key={`${r}_${c}_${sym}`}
                       className={[
-                        // ✅ bigger cell height on mobile (aspect, but we enlarge via container width + padding)
-                        'relative aspect-square overflow-hidden rounded-3xl border bg-black/22',
-                        'border-white/10',
-                        isActive ? 'ring-2 ring-emerald-300/60 shadow-[0_0_38px_rgba(16,185,129,0.28)]' : '',
-                        spinning ? 'animate-[cellPulse_0.16s_ease-in-out_infinite]' : ''
+                        'absolute inset-0',
+                        spinning ? `animate-[reelBlur_${210 + reel * 28}ms_ease-in-out_infinite]` : ''
                       ].join(' ')}
-                    >
-                      {/* blur layer */}
-                      <div
+                    />
+
+                    {src ? (
+                      <img
+                        src={src}
+                        alt={sym}
                         className={[
-                          'absolute inset-0',
-                          spinning ? `animate-[reelBlur_${210 + reel * 28}ms_ease-in-out_infinite]` : ''
+                          'relative z-10 h-full w-full object-contain',
+                          // ✅ bigger symbols (less padding)
+                          'p-1.5 sm:p-2 md:p-2.5',
+                          spinning ? 'opacity-90 blur-[0.6px] scale-[1.06]' : 'opacity-100 scale-[1.10]'
                         ].join(' ')}
+                        draggable={false}
                       />
+                    ) : (
+                      <div className="relative z-10 flex h-full w-full items-center justify-center text-[11px] font-bold text-white/45">
+                        {sym || '—'}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
 
-                      {src ? (
-                        <img
-                          src={src}
-                          alt={sym}
-                          className={[
-                            // ✅ symbols bigger + fill space better
-                            'relative z-10 h-full w-full object-contain',
-                            // less padding on mobile to fill cell
-                            'p-1.5 sm:p-2 md:p-2.5',
-                            // slight scale for richness
-                            spinning ? 'opacity-90 blur-[0.6px] scale-[1.06]' : 'opacity-100 scale-[1.08]'
-                          ].join(' ')}
-                          draggable={false}
-                        />
-                      ) : (
-                        <div className="relative z-10 flex h-full w-full items-center justify-center text-[11px] font-bold text-white/45">
-                          {sym || '—'}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              )}
+          {activeWin ? (
+            <div className="pointer-events-none absolute inset-0 z-30">
+              <svg viewBox="0 0 1000 600" preserveAspectRatio="none" className="h-full w-full">
+                <polyline points={polylinePoints} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline className="payline-draw" points={polylinePoints} fill="none" stroke="rgba(52,211,153,0.95)" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline className="payline-flash" points={polylinePoints} fill="none" stroke="rgba(245,158,11,0.95)" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </div>
+          ) : null}
 
-            {/* PAYLINE OVERLAY */}
-            {activeWin ? (
-              <div className="pointer-events-none absolute inset-0 z-30">
-                <svg viewBox="0 0 1000 600" preserveAspectRatio="none" className="h-full w-full">
-                  <polyline
-                    points={polylinePoints}
-                    fill="none"
-                    stroke="rgba(255,255,255,0.18)"
-                    strokeWidth="14"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <polyline
-                    className="payline-draw"
-                    points={polylinePoints}
-                    fill="none"
-                    stroke="rgba(52,211,153,0.95)"
-                    strokeWidth="7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <polyline
-                    className="payline-flash"
-                    points={polylinePoints}
-                    fill="none"
-                    stroke="rgba(245,158,11,0.95)"
-                    strokeWidth="5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
+          {/* ✅ Only chips, no "NO WIN" */}
+          <div className="mt-3 flex items-center justify-end gap-2 text-xs text-white/60">
+            {fsActive ? (
+              <span className="rounded-full border border-amber-300/25 bg-amber-500/10 px-2 py-1 font-extrabold text-amber-100">
+                FREE SPINS • {fsRemaining}
+              </span>
             ) : null}
-
-            {/* ✅ Bottom HUD: remove "NO WIN" / keep only useful chips */}
-            <div className="mt-3 flex items-center justify-end gap-2 text-xs text-white/60">
-              {fsActive ? (
-                <span className="rounded-full border border-amber-300/25 bg-amber-500/10 px-2 py-1 font-extrabold text-amber-100">
-                  FREE SPINS • {fsRemaining}
-                </span>
-              ) : null}
-              {winLines.length > 1 ? (
-                <span className="rounded-full border border-emerald-300/25 bg-emerald-500/10 px-2 py-1 font-extrabold text-emerald-100">
-                  LINE {selectedWinIdx + 1}
-                </span>
-              ) : null}
-            </div>
+            {winLines.length > 1 ? (
+              <span className="rounded-full border border-emerald-300/25 bg-emerald-500/10 px-2 py-1 font-extrabold text-emerald-100">
+                LINE {selectedWinIdx + 1}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
@@ -305,7 +264,6 @@ export default function SlotGrid({
           50% { transform: translateY(-1px); }
           100% { transform: translateY(0px); }
         }
-
         .payline-draw {
           stroke-dasharray: 1200;
           stroke-dashoffset: 1200;
@@ -313,7 +271,6 @@ export default function SlotGrid({
           filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.45));
         }
         @keyframes paylineDraw { to { stroke-dashoffset: 0; } }
-
         .payline-flash {
           opacity: 0;
           animation: paylineFlash 720ms ease-in-out infinite;
