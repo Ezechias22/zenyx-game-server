@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import SlotGrid, { type ProviderWin, type SymbolMap } from '@/components/SlotGrid'
 import SpinPanel from '@/components/SpinPanel'
+import SlotGrid, { type ProviderWin, type SymbolMap } from '@/components/SlotGrid'
+import ProviderLaunchFrame from '@/components/ProviderLaunchFrame'
 import BuyFreeSpinsModal from '@/components/BuyFreeSpinsModal'
 import FreeSpinsEndOverlay from '@/components/FreeSpinsEndOverlay'
 
@@ -49,7 +50,6 @@ function parseDecimal(v: unknown): number {
   }
   return 0
 }
-
 function parseIntSafe(v: unknown): number {
   if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v)
   if (typeof v === 'string') {
@@ -58,42 +58,36 @@ function parseIntSafe(v: unknown): number {
   }
   return 0
 }
-
 function empty5x3(): string[][] {
   return Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
 }
-
 function to5x3(raw: unknown): string[][] | null {
   if (!Array.isArray(raw)) return null
-
   if (raw.length === 5 && raw.every((c) => Array.isArray(c) && (c as unknown[]).length === 3)) {
     return raw.map((col) => (col as unknown[]).map((x) => String(x ?? '')))
   }
-
   if (raw.length === 3 && raw.every((r) => Array.isArray(r) && (r as unknown[]).length === 5)) {
     const out = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => ''))
     for (let row = 0; row < 3; row++) {
       const rowArr = raw[row] as unknown[]
-      for (let reel = 0; reel < 5; reel++) out[reel][row] = String(rowArr[reel] ?? '')
+      for (let reel = 0; reel < 5; reel++) {
+        out[reel][row] = String(rowArr[reel] ?? '')
+      }
     }
     return out
   }
-
   return null
 }
-
 function normalizeEvents(raw: unknown): ProviderEvent[] {
   if (!Array.isArray(raw)) return []
   return raw
     .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
     .map((x) => {
       const anyX: any = x
-      const t =
-        typeof anyX.t === 'string' ? anyX.t : typeof anyX.type === 'string' ? anyX.type : 'UNKNOWN'
+      const t = typeof anyX.t === 'string' ? anyX.t : typeof anyX.type === 'string' ? anyX.type : 'UNKNOWN'
       return { ...anyX, t }
     })
 }
-
 function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
   if (!Array.isArray(rawWins)) return []
   return rawWins
@@ -106,7 +100,7 @@ function normalizeProviderWins(rawWins: unknown): ProviderWin[] {
     .filter((w: ProviderWin) => w.positions.length >= 2)
 }
 
-function useAnimatedNumber(value: number, durationMs = 240) {
+function useAnimatedNumber(value: number, durationMs = 260) {
   const [display, setDisplay] = useState(value)
   const fromRef = useRef(value)
   const rafRef = useRef<number | null>(null)
@@ -152,10 +146,10 @@ function buildSymbolMapFromGame(game: Game | null, providerBaseUrl: string): Sym
     map[key] = url
   }
 
-  if (!map.W && map.wild) map.W = map.wild
-  if (!map.S && map.scatter) map.S = map.scatter
-  if (!map.wild && map.W) map.wild = map.W
-  if (!map.scatter && map.S) map.scatter = map.S
+  if (!map.W && (map as any).wild) map.W = (map as any).wild
+  if (!map.S && (map as any).scatter) map.S = (map as any).scatter
+  if (!(map as any).wild && map.W) (map as any).wild = map.W
+  if (!(map as any).scatter && map.S) (map as any).scatter = map.S
 
   return map
 }
@@ -168,17 +162,16 @@ export default function PlayClient() {
   const sessionIdParam = params.get('sessionId') ?? ''
 
   const PROVIDER_BASE_URL = useMemo(
-    () =>
-      process.env.NEXT_PUBLIC_PROVIDER_BASE_URL ||
-      'https://zenyx-games-provider-production.up.railway.app',
+    () => process.env.NEXT_PUBLIC_PROVIDER_BASE_URL || 'https://zenyx-games-provider-production.up.railway.app',
     []
   )
 
-  // Buy FS estimate (UI only)
   const BUY_FS_COST_MUL = 100
   const BUY_FS_SPINS = 10
 
   const [sessionId, setSessionId] = useState(sessionIdParam)
+  const [launchUrl, setLaunchUrl] = useState('')
+
   const [catalog, setCatalog] = useState<Game[]>([])
   const game = useMemo(() => catalog.find((g) => g.id === gameId) || null, [catalog, gameId])
   const symbolMap = useMemo(() => buildSymbolMapFromGame(game, PROVIDER_BASE_URL), [game, PROVIDER_BASE_URL])
@@ -195,6 +188,7 @@ export default function PlayClient() {
   const inFlight = useRef(false)
 
   const [error, setError] = useState('')
+  const [showProvider, setShowProvider] = useState(false)
 
   const [fsActive, setFsActive] = useState(false)
   const [fsAfter, setFsAfter] = useState(0)
@@ -211,26 +205,29 @@ export default function PlayClient() {
   const [buyOpen, setBuyOpen] = useState(false)
   const [buyBusy, setBuyBusy] = useState(false)
 
-  // AUTO / TURBO
-  const [autoOn, setAutoOn] = useState(false)
-  const [turboOn, setTurboOn] = useState(false)
-  const autoTimerRef = useRef<number | null>(null)
-
-  const animBalance = useAnimatedNumber(balanceNumber, 280)
+  const animBalance = useAnimatedNumber(balanceNumber, 260)
   const animWin = useAnimatedNumber(win, 220)
   const animFs = useAnimatedNumber(fsAfter, 240)
 
-  // prevent finger-drag on grid area
+  const autoTimerRef = useRef<number | null>(null)
+
+  // ✅ BLOCK SCROLL/SWIPE on this page
   useEffect(() => {
-    const prevent = (e: TouchEvent) => e.preventDefault()
-    const el = document.getElementById('slot-grid-touch-lock')
-    if (el) el.addEventListener('touchmove', prevent, { passive: false })
+    const prevOverflow = document.documentElement.style.overflow
+    const prevBodyOverflow = document.body.style.overflow
+    const prevTouch = (document.body.style as any).touchAction
+
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overflow = 'hidden'
+    ;(document.body.style as any).touchAction = 'none'
+
     return () => {
-      if (el) el.removeEventListener('touchmove', prevent as any)
+      document.documentElement.style.overflow = prevOverflow
+      document.body.style.overflow = prevBodyOverflow
+      ;(document.body.style as any).touchAction = prevTouch
     }
   }, [])
 
-  // catalog
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -250,12 +247,13 @@ export default function PlayClient() {
     }
   }, [])
 
-  // session
   useEffect(() => {
     if (!gameId) return
 
     if (sessionIdParam) {
       setSessionId(sessionIdParam)
+      const base = PROVIDER_BASE_URL.replace(/\/$/, '')
+      setLaunchUrl(`${base}/v1/launch?s=${encodeURIComponent(sessionIdParam)}`)
       return
     }
 
@@ -276,6 +274,8 @@ export default function PlayClient() {
         if (!alive) return
 
         setSessionId(json.sessionId)
+        const base = PROVIDER_BASE_URL.replace(/\/$/, '')
+        setLaunchUrl(`${base}/v1/launch?s=${encodeURIComponent(json.sessionId)}`)
 
         const next = new URLSearchParams(params.toString())
         next.set('sessionId', json.sessionId)
@@ -294,7 +294,7 @@ export default function PlayClient() {
   function showBonus(text: string) {
     setBonusText(text)
     setBonusIntro(true)
-    window.setTimeout(() => setBonusIntro(false), 1400)
+    window.setTimeout(() => setBonusIntro(false), 1300)
   }
 
   async function doSpin(
@@ -311,7 +311,7 @@ export default function PlayClient() {
     setWins([])
 
     try {
-      const betToSend = Math.max(0.01, Number(bet) || 1)
+      const betToSend = Math.max(1, Number(bet) || 1)
       const payload: any = {
         sessionId,
         bet: betToSend,
@@ -336,11 +336,13 @@ export default function PlayClient() {
       const g = to5x3(raw?.result?.grid)
       if (g) setGrid(g)
 
-      setWins(normalizeProviderWins(raw?.result?.wins))
+      const winList = normalizeProviderWins(raw?.result?.wins)
+      setWins(winList)
+
       setWin(parseDecimal(raw?.result?.win ?? raw?.win ?? 0))
 
       const fs = raw?.result?.freeSpins
-      const after = Math.max(0, parseIntSafe(fs?.after))
+      const after = parseIntSafe(fs?.after)
       const active = Boolean(fs?.active) || after > 0
       const mult = Math.max(1, parseDecimal(fs?.multiplier ?? 1))
       setFsAfter(after)
@@ -378,18 +380,14 @@ export default function PlayClient() {
       }
     } catch (e: any) {
       setError(e?.message ?? 'Spin error')
-      // si erreur pendant AUTO -> stop auto
-      if (trigger === 'auto') setAutoOn(false)
     } finally {
-      const settle = turboOn ? 90 : 170
       window.setTimeout(() => {
         setSpinning(false)
         inFlight.current = false
-      }, settle)
+      }, 180)
     }
   }
 
-  // ✅ Free spins autoplay (provider authoritative)
   useEffect(() => {
     if (autoTimerRef.current) {
       window.clearTimeout(autoTimerRef.current)
@@ -399,7 +397,7 @@ export default function PlayClient() {
     if (fsActive && fsAfter > 0 && !spinning && !inFlight.current) {
       autoTimerRef.current = window.setTimeout(() => {
         doSpin('auto')
-      }, turboOn ? 260 : 520)
+      }, 520)
     }
 
     return () => {
@@ -409,29 +407,7 @@ export default function PlayClient() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fsActive, fsAfter, spinning, turboOn])
-
-  // ✅ AUTO mode (normal spins) — only when NOT in free spins
-  useEffect(() => {
-    if (autoTimerRef.current) {
-      window.clearTimeout(autoTimerRef.current)
-      autoTimerRef.current = null
-    }
-
-    if (autoOn && !fsActive && !spinning && !inFlight.current) {
-      autoTimerRef.current = window.setTimeout(() => {
-        doSpin('auto')
-      }, turboOn ? 300 : 700)
-    }
-
-    return () => {
-      if (autoTimerRef.current) {
-        window.clearTimeout(autoTimerRef.current)
-        autoTimerRef.current = null
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOn, fsActive, spinning, turboOn])
+  }, [fsActive, fsAfter, spinning])
 
   async function confirmBuyFreeSpins() {
     if (!sessionId) return
@@ -450,173 +426,161 @@ export default function PlayClient() {
   const headerTitle = game?.name ?? gameId
   const currency = wallet?.currency ?? 'BRL'
 
-  const bgUrl = useMemo(() => {
-    const base = PROVIDER_BASE_URL.replace(/\/$/, '')
-    const bg = game?.assets?.background
-    if (!bg) return ''
-    if (bg.startsWith('http')) return bg
-    return `${base}${bg.startsWith('/') ? '' : '/'}${bg}`
-  }, [game?.assets?.background, PROVIDER_BASE_URL])
+  // Background from provider (optional)
+  const bg = game?.assets?.background
+    ? (game.assets.background.startsWith('http')
+        ? game.assets.background
+        : `${PROVIDER_BASE_URL.replace(/\/$/, '')}${game.assets.background.startsWith('/') ? '' : '/'}${game.assets.background}`)
+    : ''
 
   return (
-    <div
-      className="min-h-[100dvh] w-full"
-      style={{
-        backgroundImage: bgUrl ? `url(${bgUrl})` : undefined,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        backgroundRepeat: 'no-repeat'
-      }}
-    >
-      <div className="min-h-[100dvh] bg-black/55">
-        <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1100px] flex-col px-3 pb-4">
-          {/* header compact */}
-          <div className="pt-3">
-            {error ? (
-              <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-semibold text-red-200">
-                {error}
+    <div className="h-[100dvh] w-full overflow-hidden">
+      {/* Background */}
+      <div
+        className="absolute inset-0 -z-10"
+        style={{
+          backgroundImage: bg ? `url(${bg})` : undefined,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          filter: bg ? 'saturate(1.1) contrast(1.05)' : undefined
+        }}
+      />
+      <div className="absolute inset-0 -z-10 bg-black/55" />
+
+      <div className="mx-auto h-full w-full max-w-[1100px] px-3 pt-3 pb-[88px] md:pb-[92px] overflow-hidden">
+        {error ? (
+          <div className="mb-2 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+            {error}
+          </div>
+        ) : null}
+
+        {/* Header (remove PROVIDER VIEW for prod) */}
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[15px] font-extrabold leading-none">{headerTitle}</div>
+            <div className="mt-1 text-[11px] leading-none text-white/70">
+              {currency} • {(animBalance || 0).toFixed(2)}
+              {fsActive ? (
+                <span className="ml-2 font-extrabold text-amber-200">
+                  FS {Math.max(0, Math.round(animFs))} • x{fsMultiplier}
+                </span>
+              ) : null}
+              {betCost === 0 ? <span className="ml-2 text-emerald-200/90">• FREE</span> : null}
+            </div>
+          </div>
+
+          {/* ✅ hidden by default (tu peux remettre en dev si tu veux) */}
+          <button
+            onClick={() => setShowProvider(true)}
+            className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 md:block"
+            disabled={!launchUrl}
+          >
+            PROVIDER VIEW
+          </button>
+        </div>
+
+        {/* Grid area (centered, no scroll) */}
+        <div className="flex h-[calc(100dvh-88px-58px)] flex-col items-center justify-center overflow-hidden md:h-[calc(100dvh-92px-58px)]">
+          <div className="relative w-full">
+            {fsActive ? (
+              <div className="pointer-events-none absolute left-1/2 top-2 z-30 -translate-x-1/2">
+                <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-4 py-2 text-[11px] font-extrabold text-amber-100 shadow-[0_0_28px_rgba(245,158,11,0.30)]">
+                  FREE SPINS MODE • {fsAfter} LEFT • x{fsMultiplier}
+                </div>
               </div>
             ) : null}
 
-            <div className="text-base font-extrabold text-white">{headerTitle}</div>
-            <div className="text-[11px] font-semibold text-white/70">
-              {currency} • Balance: {(animBalance || 0).toFixed(2)}
-              {fsActive ? (
-                <span className="ml-2 font-extrabold text-amber-200">
-                  FREE SPINS: {Math.max(0, Math.round(animFs))} • x{fsMultiplier}
-                </span>
-              ) : null}
-              {betCost === 0 ? <span className="ml-2 text-emerald-200/90">• FREE SPIN</span> : null}
-            </div>
-          </div>
-
-          {/* grid area grows */}
-          <div className="mt-3 flex flex-1 flex-col items-center justify-center">
-            <div id="slot-grid-touch-lock" className="touch-none select-none w-full">
-              <div className="relative">
-                {/* FS badge */}
-                {fsActive ? (
-                  <div className="pointer-events-none absolute left-1/2 top-2 z-30 -translate-x-1/2">
-                    <div className="rounded-2xl border border-amber-300/25 bg-amber-500/15 px-3 py-1.5 text-[11px] font-extrabold text-amber-100 shadow-[0_0_26px_rgba(245,158,11,0.35)]">
-                      FREE SPINS • {fsAfter} LEFT • x{fsMultiplier}
-                    </div>
+            {bonusIntro ? (
+              <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-3xl bg-gradient-to-b from-amber-500/22 via-purple-500/12 to-black/40 backdrop-blur-[1px] animate-[fadeInOut_1.3s_ease-in-out_forwards]" />
+                <div className="relative z-10 text-center">
+                  <div className="text-[clamp(18px,4vw,34px)] font-black tracking-tight text-white drop-shadow-[0_0_26px_rgba(245,158,11,0.33)]">
+                    BONUS
                   </div>
-                ) : null}
-
-                {/* bonus overlay */}
-                {bonusIntro ? (
-                  <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center">
-                    <div className="absolute inset-0 rounded-[26px] bg-gradient-to-b from-amber-500/25 via-purple-500/15 to-black/40 backdrop-blur-[1px] animate-[fadeInOut_1.4s_ease-in-out_forwards]" />
-                    <div className="relative z-10 text-center">
-                      <div className="text-[clamp(18px,3.6vw,40px)] font-black tracking-tight text-white drop-shadow-[0_0_30px_rgba(245,158,11,0.35)]">
-                        BONUS
-                      </div>
-                      <div className="mt-1 text-[clamp(11px,2.2vw,15px)] font-extrabold text-amber-100/95">
-                        {bonusText}
-                      </div>
-                    </div>
+                  <div className="mt-2 text-[clamp(11px,2.2vw,14px)] font-extrabold text-amber-100/95">
+                    {bonusText}
                   </div>
-                ) : null}
-
-                <SlotGrid
-                  grid={grid}
-                  spinning={spinning}
-                  providerBaseUrl={PROVIDER_BASE_URL}
-                  gameId={gameId}
-                  symbolMap={symbolMap}
-                  wins={wins}
-                  fsActive={fsActive}
-                  fsRemaining={fsAfter}
-                  turbo={turboOn}
-                />
-              </div>
-
-              {/* BUY FS under grid */}
-              <div className="mt-2 w-full">
-                <button
-                  onClick={() => {
-                    if (fsActive) return
-                    setBuyOpen(true)
-                  }}
-                  disabled={spinning || fsActive}
-                  className={[
-                    'h-11 w-full rounded-2xl border border-white/15',
-                    'bg-white/10 text-sm font-black tracking-wide text-white/90',
-                    'hover:bg-white/15 active:scale-[0.99]',
-                    'transition-all duration-200',
-                    spinning || fsActive ? 'opacity-50' : 'animate-[softGlow_1.6s_ease-in-out_infinite]'
-                  ].join(' ')}
-                >
-                  BUY FREE SPINS
-                </button>
-              </div>
-
-              {/* panel (auto/turbo/spin) */}
-              <div className="mt-2 w-full">
-                <SpinPanel
-                  balance={Number.isFinite(animBalance) ? animBalance : balanceNumber}
-                  win={Number.isFinite(animWin) ? animWin : win}
-                  bet={bet}
-                  setBet={(v) => {
-                    if (fsActive) return
-                    setBet(v)
-                  }}
-                  onSpin={() => doSpin('manual')}
-                  spinning={spinning || (fsActive && fsAfter > 0)}
-                  fsLocked={fsActive}
-                  autoOn={autoOn}
-                  turboOn={turboOn}
-                  onToggleAuto={() => {
-                    if (fsActive) return // FS already auto-run
-                    setAutoOn((x) => !x)
-                  }}
-                  onToggleTurbo={() => setTurboOn((x) => !x)}
-                />
-              </div>
-
-              {fsActive ? (
-                <div className="mt-2 text-center text-[11px] font-semibold text-white/70">
-                  Bet locked during free spins • Provider controls betCost
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
+
+            <SlotGrid
+              grid={grid}
+              spinning={spinning}
+              providerBaseUrl={PROVIDER_BASE_URL}
+              gameId={gameId}
+              symbolMap={symbolMap}
+              wins={wins}
+              fsActive={fsActive}
+              fsRemaining={fsAfter}
+            />
           </div>
 
-          {/* modals */}
-          <BuyFreeSpinsModal
-            open={buyOpen}
-            bet={Math.max(0.01, Number(bet) || 1)}
-            currency={currency}
-            buyFsCostMul={BUY_FS_COST_MUL}
-            freeSpinsCount={BUY_FS_SPINS}
-            busy={buyBusy || spinning}
-            onCancel={() => setBuyOpen(false)}
-            onConfirm={confirmBuyFreeSpins}
-          />
-
-          <FreeSpinsEndOverlay
-            open={fsEndOpen}
-            gameId={fsEndGameId || gameId}
-            totalWin={fsEndTotalWin}
-            currency={currency}
-            onClose={() => setFsEndOpen(false)}
-          />
-
-          <style jsx global>{`
-            @keyframes fadeInOut {
-              0% { opacity: 0; transform: scale(0.98); }
-              12% { opacity: 1; transform: scale(1); }
-              70% { opacity: 1; transform: scale(1); }
-              100% { opacity: 0; transform: scale(1.02); }
-            }
-            @keyframes softGlow {
-              0% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
-              50% { box-shadow: 0 0 26px rgba(245,158,11,0.22); }
-              100% { box-shadow: 0 0 0 rgba(245,158,11,0.0); }
-            }
-          `}</style>
+          {/* BUY FREE SPINS under grid */}
+          <div className="mt-3 w-full max-w-[760px]">
+            <button
+              onClick={() => {
+                if (fsActive) return
+                setBuyOpen(true)
+              }}
+              disabled={spinning || fsActive}
+              className="h-11 w-full rounded-2xl border border-white/10 bg-white/10 text-sm font-black text-white/90 hover:bg-white/15 disabled:opacity-50"
+            >
+              BUY FREE SPINS
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Bottom panel compact */}
+      <SpinPanel
+        balance={Number.isFinite(animBalance) ? animBalance : balanceNumber}
+        win={Number.isFinite(animWin) ? animWin : win}
+        bet={bet}
+        setBet={(v) => {
+          if (fsActive) return
+          setBet(v)
+        }}
+        onSpin={() => doSpin('manual')}
+        spinning={spinning || (fsActive && fsAfter > 0)}
+        fsLocked={fsActive}
+        onBuyFreeSpins={() => {
+          if (fsActive) return
+          setBuyOpen(true)
+        }}
+      />
+
+      <BuyFreeSpinsModal
+        open={buyOpen}
+        bet={Math.max(1, Number(bet) || 1)}
+        currency={currency}
+        buyFsCostMul={BUY_FS_COST_MUL}
+        freeSpinsCount={BUY_FS_SPINS}
+        busy={buyBusy || spinning}
+        onCancel={() => setBuyOpen(false)}
+        onConfirm={confirmBuyFreeSpins}
+      />
+
+      <FreeSpinsEndOverlay
+        open={fsEndOpen}
+        gameId={fsEndGameId || gameId}
+        totalWin={fsEndTotalWin}
+        currency={currency}
+        onClose={() => setFsEndOpen(false)}
+      />
+
+      {showProvider && launchUrl ? (
+        <ProviderLaunchFrame launchUrl={launchUrl} onClose={() => setShowProvider(false)} />
+      ) : null}
+
+      <style jsx global>{`
+        @keyframes fadeInOut {
+          0% { opacity: 0; transform: scale(0.98); }
+          12% { opacity: 1; transform: scale(1); }
+          70% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.02); }
+        }
+      `}</style>
     </div>
   )
 }
