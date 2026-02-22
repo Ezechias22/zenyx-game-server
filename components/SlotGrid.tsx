@@ -166,8 +166,9 @@ export default function SlotGrid({
       <div
         className="relative mx-auto w-full rounded-[26px] border border-white/12 bg-white/6 p-2.5 shadow-[0_18px_70px_rgba(0,0,0,0.52)]"
         style={{
-          height: 'min(62vh, 640px)'
-        }}
+  height: 'min(48vh, 520px)',
+  maxHeight: 520
+}}
       >
         {/* tighter gap + bigger symbols */}
         <div className="grid h-full grid-cols-5 gap-[4px] sm:gap-[6px]">
